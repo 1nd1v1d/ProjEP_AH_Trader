@@ -1,0 +1,20 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/"
+   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://www.blizzard.com/wow/ui/">
+
+  <!-- Haupt-Event-Frame: OnLoad registriert alle Events zuverlaessig -->
+  <Frame name="ProjEP_AHT_EventFrame">
+    <Scripts>
+      <OnLoad>
+        ProjEP_AHT_RegisterEvents(self);
+      </OnLoad>
+      <OnUpdate>
+        ProjEP_AHT_OnUpdate(self, elapsed);
+      </OnUpdate>
+      <OnEvent>
+        ProjEP_AHT_OnEvent(self, event, ...);
+      </OnEvent>
+    </Scripts>
+  </Frame>
+
+</Ui>

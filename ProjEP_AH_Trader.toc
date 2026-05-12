@@ -1,0 +1,21 @@
+## Interface: 30300
+## Title: ProjEP AH Trader
+## Notes: AH-Analyse fuer Alchemie, Schmiedekunst, Schneiderei, Lederverarbeitung und Ingenieurskunst (Project Epoch / WotLK 3.3.5)
+## Author: ProjEP_AHT
+## Version: 1.1.0
+## SavedVariables: ProjEP_AHT_DB
+
+Core.lua
+Locales.lua
+Calculator.lua
+Alchemy.lua
+Blacksmithing.lua
+Tailoring.lua
+Leatherworking.lua
+Engineering.lua
+Buyer.lua
+Poster.lua
+Mats.lua
+Scanner.lua
+UI.lua
+ProjEP_AH_Trader.xml
