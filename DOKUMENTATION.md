@@ -1,7 +1,7 @@
 # ProjEP AH Trader – Umsetzungsdokumentation
 
 > **Zielplattform:** Project Epoch (WoW WotLK 3.3.5a) | Interface `30300` | Lua 5.1  
-> **Version:** 1.0.0 (Diagnose-Build mit `[AHT-DIAG]`-Marker)  
+> **Version:** 1.1.0  
 > **SavedVariables:** `ProjEP_AHT_DB`  
 > **Globales Objekt:** `PROJEP_AHT` (Alias: lokales `local AHT = PROJEP_AHT` in jeder Datei)  
 > **Deploy:** `powershell -ExecutionPolicy Bypass -File deploy.ps1`
@@ -35,8 +35,8 @@ ProjEP_AH_Trader/
 ├── Inscription.lua        Glyphen-Analyse, Mahl-Raten, Tintenkosten
 ├── Transmute.lua          Transmutations-Daten und Kalkulation
 ├── Jewelcrafting.lua      Gem-Schliff- und Prospektions-Analyse
-├── Buyer.lua              Zutaten-Kauf-Automat (AH)
-├── Poster.lua             Auktions-Post-Automat
+├── Buyer.lua              Auctionator-Bridge: Materialsuche via Atr_SelectPane + Atr_Search_Onclick
+├── Poster.lua             Stub (Poster-Automatik entfernt)
 ├── Mats.lua               Material-Verwaltung, Analyse, Kaufdialog
 ├── Scanner.lua            Scan-Maschinen (Item-Scan, GetAll, Mats-Scan)
 ├── UI.lua                 Tabbed-Hauptfenster + alle Dialoge
@@ -139,10 +139,7 @@ Registriert via `ProjEP_AHT_RegisterEvents(self)` (aufgerufen aus dem XML-`OnLoa
 | `TRADE_SKILL_SHOW` | `OnTradeSkillShow()` |
 | `AUCTION_HOUSE_SHOW` | `[Event AUCTION_HOUSE_SHOW]` + `OnAHShow()` |
 | `AUCTION_HOUSE_CLOSED` | `OnAHClosed()` |
-| `AUCTION_ITEM_LIST_UPDATE` | `OnAuctionItemListUpdate()` (Dispatcher: GetAll/Buy/Mats/Post/Scan) |
-| `CHAT_MSG_SYSTEM` | `ERR_AUCTION_BID_PLACED` → `OnBidPlaced()` |
-| `NEW_AUCTION_UPDATE` | `OnNewAuctionUpdate()` (für Poster) |
-| `UI_ERROR_MESSAGE` | Buyer/Mats-Locks zurücksetzen |
+| `AUCTION_ITEM_LIST_UPDATE` | `OnAuctionItemListUpdate()` (Dispatcher: GetAll/Mats/Scan) |
 
 **Minimap-Button (`AHT:CreateMinimapButton`):**
 
@@ -268,48 +265,37 @@ Verwendet `DEFAULT_PROSPECT_RATES` (konfigurierbar via `AHT.prospectRates`):
 
 ### 3.8 `Buyer.lua`
 
-Zwei-Phasen-Kaufmaschine für Zutaten:
+**Auctionator-Bridge** – delegiert die Materialsuche an das Addon **Auctionator** statt einen eigenen Kauf-Automaten zu betreiben.
 
-**Phase 1 – Angebote sammeln:**  
-Sendet `QueryAuctionItems` für jedes benötigte Item, sammelt alle Angebote in `AHT.allOffersCache`.
+> **Voraussetzung:** Das Addon `Auctionator` muss aktiviert sein.
 
-**Phase 2 – Günstigste kaufen:**  
-Iteriert durch sortierte Angebote, kauft bis Menge erreicht oder `maxPPU` überschritten.
+**`AHT:BuyMaterialsViaAuctionator(recipe)`**
 
-**`AHT:CalcMaxPPU(recipe, reagentName, reagentCount)`**  
-Berechnet den maximalen Kaufpreis pro Stück, damit noch `MIN_MARGIN` (10%) Gewinn bleibt.
+Akzeptiert zwei Formen:
+- **Rezept-Modus** (`recipe.reagents` vorhanden): Fügt das herzustellende Item **und** alle nicht-Vendor-Zutaten in eine temporäre Auctionator-Einkaufsliste ein.
+- **Material-Modus** (nur `recipe.name`, kein `reagents`): Sucht das Item direkt (Mats-Tab).
 
-**`AHT:StartBuy(recipe, count)`** – Startet Kauf-Automat  
-**`AHT:CancelBuy()`** – Bricht ab  
-**`AHT:IsBuying()`** – Status-Abfrage  
-**`AHT:BuildBuyPlan(itemName, needed)`** – Erstellt Kaufplan für UI-Anzeige
+Ablauf:
+1. Temporäre Shopping-List via `Atr_SList.create(recipe.name, false, true)` erstellen
+2. Items als `"ItemName"`-Strings eintragen
+3. `Atr_SelectPane(3)` – wechselt zum **Buy-Reiter** (BUY_TAB = 3)
+4. `Atr_SetSearchText("{ ListenName }")` + `Atr_Search_Onclick()` – startet Scan
 
-**MatsBuyer** (separater Kaufpfad für Rohmaterialien):  
-- `StartMatsBuy(matName, needed, maxPPU)`
-- `CancelMatsBuy()` / `IsMatsBuying()`
-- `OnMatsBuyUpdate()` / `OnMatsBidPlaced()`
+> **Hinweis:** `Atr_SearchAH()` wird bewusst **nicht** verwendet, da es intern `Atr_SelectPane(SELL_TAB=1)` aufruft und so den Scan auf dem falschen Reiter (Verkauf statt Kauf) auslöst.
+
+**Stubs** (für rückwärtskompatible Aufrufe aus Core.lua):  
+`IsBuying()`, `CancelBuy()`, `IsPosting()`, `CancelPost()`, `IsMatsBuying()`, `CancelMatsBuy()`, alle `On*Update()`-Handler → alle geben `false` zurück bzw. sind No-Ops.
 
 ---
 
 ### 3.9 `Poster.lua`
 
-Automatisierter AH-Einsteller:
+Die Poster-Automatik wurde entfernt. Das Einstellen von Auktionen erfolgt manuell direkt über das Auktionshaus oder Auctionator.
 
-**Zustandsmaschine:** `splitting` → `split_wait` → `placing` → `confirming` → nächster Stack
-
-**`AHT:CalcPostPrice(recipe)`**  
-- Unterbietet günstigstes AH-Angebot um 1 Kupfer
-- Minimum: 5% über Einstandskosten
-- Fallback: 20% Aufschlag auf Einstand
-
-**`AHT:DoStartAuction()`**  
-Nutzt `GetAuctionDeposit(duration, count, 1)` für exakte Depositberechnung.
-
-**`AHT:CheckPostPrice(itemName, callback)`**  
-Asynchrone Preisabfrage vor dem Einstellen.
-
-**`AHT:StartPost(name, recipe, stackSize, maxStacks)`**  
-**`AHT:CancelPost()`** / **`AHT:IsPosting()`**
+Die Datei enthält nur noch den Load-Status-Marker:
+```lua
+if AHT._loadStatus then AHT._loadStatus.poster = true end
+```
 
 ---
 
@@ -338,9 +324,8 @@ Ergebnis in `AHT.matsDisplayResults` (gefiltert + sortiert).
 **Verwaltungsdialog (`ShowMatsManageDialog`):**  
 Materialien per Name hinzufügen oder entfernen.
 
-**Kaufdialog (`ShowMatsBuyDialog`):**  
-Zeigt aktuellen Preis, gewichteten Durchschnitt und Abweichung. Löst `StartMatsBuy` aus.  
-Aktualitätswarnung wenn Daten > 10 Minuten alt.
+**Kaufen via Auctionator:**  
+Rechtsklick auf eine Zeile im Mats-Tab ruft `AHT:BuyMaterialsViaAuctionator({name=...})` auf, welches Auctionator zum Buy-Reiter wechselt und das Material direkt sucht.
 
 ---
 
@@ -399,7 +384,7 @@ Tabbed-Hauptfenster (780 × 530 px) mit 5 Tabs:
 - Sortierung nach Gewinn oder Marge (auf/absteigend)
 - Suchfeld (Echtzeitfilter)
 - Alle-an / Alle-aus Buttons
-- Rechtsklick: Kaufdialog | Shift+Rechtsklick: Post-Dialog
+- Rechtsklick: Auctionator Buy-Reiter öffnen mit Endprodukt + allen Zutaten
 - Hover-Tooltip: vollständige Aufschlüsselung (Zutaten, Preise, Gewinn, Trend)
 
 #### Tab 2: Transmuten
@@ -418,22 +403,11 @@ Tabbed-Hauptfenster (780 × 530 px) mit 5 Tabs:
 
 #### Tab 5: Materialien
 - 12 Zeilen: Materialname, aktueller Preis, gewichteter Durchschnitt, Abweichung, Listings, Scan-Anzahl
-- Rechtsklick: Material-Kaufdialog
+- Rechtsklick: Auctionator Buy-Reiter mit dem Material öffnen
 - Button: Materialverwaltung öffnen
 
-#### Kaufdialog (`ShowBuyDialog`)
-- Rezept-Name, Anzahl-Eingabe
-- Geschätzte Gesamtkosten
-- Vendor-Items-Hinweis
-- Gold-Warnung wenn nicht ausreichend
-- Startet `StartBuy(recipe, count)`
-
-#### Post-Dialog (`ShowPostDialog`)
-- Stackgröße + Anzahl Stacks + Preis/Stück
-- Vorschau: Anzahl Auktionen + Gesamtmenge
-- In-Bags-Anzeige
-- „Preis prüfen": asynchrone AH-Abfrage, Preisvorschlag -1k unter AH
-- Startet `StartPost(name, recipe, stackSize, maxStacks)`
+#### Kaufdialog / Post-Dialog
+Entfernt. Kauf wird via Auctionator durchgeführt (Rechtsklick → Buy-Reiter).
 
 **`AHT:RefreshAllUIs()`**  
 Aktualisiert den aktiven Tab + alle sichtbaren externen Fenster (Mats-Fenster, JC-Fenster).
@@ -588,8 +562,7 @@ Dann im Dialog Materialnamen eingeben und „Hinzufügen" klicken.
 2. **Trank-Analyse** → Item-Scan starten
 3. Nach Scan: Hauptfenster öffnet sich automatisch
 4. Ergebnisse nach Gewinn/Marge sortiert
-5. Rechtsklick auf Zeile → Kaufdialog
-6. Shift+Rechtsklick → Post-Dialog
+5. Rechtsklick auf Zeile → Auctionator Buy-Reiter mit Endprodukt + Zutaten
 
 ### GetAll-Scan (empfohlen)
 - **GetAll-Scan**-Button klicken
@@ -648,6 +621,14 @@ ProjEP_AHT_DB = {
 | | Minimap-Button: gelb, „AHT"-Label, Strata `TOOLTIP`, links neben dem Minimap (RIGHT/LEFT-Anker), `EnableMouse` + `RegisterForClicks` explizit gesetzt |
 | | `ApplyFilterAndSort()` defensiv: `nil`-Filter, `getKey()`-Helper, `pcall`-geschütztes `table.sort`, saubere strict-weak-order-Logik |
 | | Click-Handler des Minimap-Buttons mit getrennten `pcall`-Schritten (`Schritt 1: CalculateMargins`, `Schritt 2: ShowUI`) für gezielte Fehlerlokalisierung |
+| 1.1.0 | **Auctionator-Integration:** Kauf-/Post-Automatik vollständig entfernt |
+| | `Buyer.lua` ersetzt durch Auctionator-Bridge `BuyMaterialsViaAuctionator()` |
+| | `Poster.lua` auf Stub reduziert |
+| | Rechtsklick (alle Tabs): öffnet Auctionator Buy-Reiter mit Endprodukt + Zutaten |
+| | Rechtsklick (Mats-Tab): öffnet Auctionator Buy-Reiter für das Material |
+| | `Atr_SelectPane(3)` statt `Atr_SearchAH()` – wechselt korrekt zum Buy-Reiter (BUY_TAB=3) |
+| | Core.lua: Events `CHAT_MSG_SYSTEM`, `NEW_AUCTION_UPDATE`, `UI_ERROR_MESSAGE` abgemeldet |
+| | `OnAHClosed`, `ProjEP_AHT_OnUpdate`, `/stop`-Befehl von Buy/Post-Referenzen bereinigt |
 
 ---
 
