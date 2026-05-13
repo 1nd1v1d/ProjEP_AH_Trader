@@ -450,10 +450,7 @@ SlashCmdList["PROJEP_AHT"] = function(msg)
     elseif msg == "getall" then
         AHT:StartGetAllScan()
     elseif msg == "stop" or msg == "cancel" then
-        if AHT:IsPosting() then AHT:CancelPost()
-        elseif AHT:IsBuying() then AHT:CancelBuy()
-        elseif AHT.IsMatsBuying and AHT:IsMatsBuying() then AHT:CancelMatsBuy(true)
-        else AHT:CancelScan() end
+        AHT:CancelScan()
     elseif msg == "reset" then
         AHT.prices       = {}
         AHT.priceHistory = {}
@@ -581,9 +578,6 @@ function ProjEP_AHT_RegisterEvents(self)
     self:RegisterEvent("AUCTION_HOUSE_SHOW")
     self:RegisterEvent("AUCTION_HOUSE_CLOSED")
     self:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
-    self:RegisterEvent("CHAT_MSG_SYSTEM")
-    self:RegisterEvent("NEW_AUCTION_UPDATE")
-    self:RegisterEvent("UI_ERROR_MESSAGE")
 end
 
 function ProjEP_AHT_OnEvent(self, event, ...)
@@ -619,41 +613,6 @@ function ProjEP_AHT_OnEvent(self, event, ...)
         AHT:OnAHClosed()
     elseif event == "AUCTION_ITEM_LIST_UPDATE" then
         AHT:OnAuctionItemListUpdate()
-    elseif event == "CHAT_MSG_SYSTEM" then
-        if arg1 and arg1 == ERR_AUCTION_BID_PLACED then
-            AHT:OnBidPlaced()
-        end
-    elseif event == "UI_ERROR_MESSAGE" then
-        if AHT.buyLocked and arg1 then
-            AHT.buyLocked       = false
-            AHT.buyLockTimer    = 0
-            AHT.buyPendingOffer = nil
-            AHT.buyRetries      = (AHT.buyRetries or 0) + 1
-            if AHT:IsBuying() then
-                if AHT.buyRetries >= 3 then
-                    AHT:Print("|cffff4444Kauf: Gebot blockiert (Interface action failed). Kauf abgebrochen.|r")
-                    AHT:Print("|cffaaaaaa Tipp: AH schliessen und neu oeffnen, dann erneut versuchen.|r")
-                    AHT:CancelBuy()
-                else
-                    AHT:Print(string.format("|cffff9900Kauf: Gebot blockiert, retry %d/3...|r", AHT.buyRetries))
-                    AHT.buyState     = "searching"
-                    AHT.buyTimer     = 0
-                    AHT.buySentTimer = 0
-                end
-            end
-        end
-        if AHT.matsBuyLocked and arg1 then
-            AHT.matsBuyLocked = false
-            AHT.matsBuyPending = nil
-            if AHT.IsMatsBuying and AHT:IsMatsBuying() then
-                -- Gebot fehlgeschlagen → nächste Seite erneut abfragen
-                AHT.matsBuyState = "searching"
-                AHT.matsBuyTimer = 0
-                AHT.matsBuySent  = 0
-            end
-        end
-    elseif event == "NEW_AUCTION_UPDATE" then
-        if AHT:IsPosting() then AHT:OnNewAuctionUpdate() end
     end
 end
 
@@ -674,34 +633,6 @@ function ProjEP_AHT_OnUpdate(self, elapsed)
     if AHT:IsMatScanning() then
         AHT:OnUpdateMats(elapsed)
     end
-    if AHT.IsMatsBuying and AHT:IsMatsBuying() then
-        AHT:OnMatsBuyUpdate(elapsed)
-    end
-    if AHT.buyState ~= "idle" then
-        AHT:OnBuyUpdate(elapsed)
-    end
-    if AHT.postState ~= "idle" then
-        AHT:OnPostUpdate(elapsed)
-    end
-    local pc = AHT.postPriceCheck
-    if pc and pc.state == "waiting" then
-        pc.timer = pc.timer + elapsed
-        if pc.timer >= 0.3 then
-            pc.timer = 0
-            if CanSendAuctionQuery() then
-                local _, ci, si = AHT:GetAuctionQueryFilters(pc.name)
-                pc.state = "sent"
-                pc.sentTimer = 0
-                QueryAuctionItems(pc.name, nil, nil, nil, ci, si, pc.page, nil, nil)
-            end
-        end
-    elseif pc and pc.state == "sent" then
-        pc.sentTimer = (pc.sentTimer or 0) + elapsed
-        if pc.sentTimer >= 10.0 then
-            pc.state = "done"
-            AHT:ShowPriceCheckResult()
-        end
-    end
 end
 
 
@@ -709,14 +640,6 @@ end
 function AHT:OnAuctionItemListUpdate()
     if AHT.scanState == "getall_sent" then
         AHT:OnGetAllAuctionListUpdate()
-    elseif AHT.postPriceCheck and AHT.postPriceCheck.state == "sent" then
-        AHT:OnPostPriceCheckResult()
-    elseif AHT:IsPosting() then
-        -- Poster ignoriert AUCTION_ITEM_LIST_UPDATE
-    elseif AHT.IsMatsBuying and AHT:IsMatsBuying() then
-        AHT:OnMatsBuyAuctionListUpdate()
-    elseif AHT:IsBuying() then
-        AHT:OnBuyAuctionListUpdate()
     elseif AHT:IsMatScanning() then
         AHT:OnMatsAuctionListUpdate()
     elseif AHT.scanState == "sent" then
@@ -733,18 +656,38 @@ function AHT:OnTradeSkillShow()
     if lower == "alchemy" or lower == "alchemie" or lower == "alchimie"
        or lower == "alchimia" or lower == "alquimia" then
         AHT:LearnAlchemyRecipes()
+        AHT:CalculateMargins()
+        if AHT.activeTab == "alchemy" and ProjEP_AHT_MainFrame and ProjEP_AHT_MainFrame:IsVisible() then
+            AHT:ApplyFilterAndSort(); AHT:RefreshUI()
+        end
     elseif lower == "blacksmithing" or lower == "schmiedekunst"
        or lower == "forge" or lower == "herrería" then
         AHT:LearnBlacksmithingRecipes()
+        AHT:CalculateBlacksmithingMargins()
+        if AHT.activeTab == "blacksmithing" and ProjEP_AHT_MainFrame and ProjEP_AHT_MainFrame:IsVisible() then
+            AHT:RefreshBlacksmithingTab()
+        end
     elseif lower == "tailoring" or lower == "schneiderei"
        or lower == "couture" or lower == "sastrería" then
         AHT:LearnTailoringRecipes()
+        AHT:CalculateTailoringMargins()
+        if AHT.activeTab == "tailoring" and ProjEP_AHT_MainFrame and ProjEP_AHT_MainFrame:IsVisible() then
+            AHT:RefreshTailoringTab()
+        end
     elseif lower == "leatherworking" or lower == "lederverarbeitung"
        or lower == "travail du cuir" or lower == "peletería" then
         AHT:LearnLeatherworkingRecipes()
+        AHT:CalculateLeatherworkingMargins()
+        if AHT.activeTab == "leatherworking" and ProjEP_AHT_MainFrame and ProjEP_AHT_MainFrame:IsVisible() then
+            AHT:RefreshLeatherworkingTab()
+        end
     elseif lower == "engineering" or lower == "ingenieurskunst"
        or lower == "ingeneurkunst" or lower == "ingénierie" then
         AHT:LearnEngineeringRecipes()
+        AHT:CalculateEngineeringMargins()
+        if AHT.activeTab == "engineering" and ProjEP_AHT_MainFrame and ProjEP_AHT_MainFrame:IsVisible() then
+            AHT:RefreshEngineeringTab()
+        end
     end
 end
 
@@ -752,17 +695,10 @@ end
 function AHT:OnAHClosed()
     if AHT:IsScanning()    then AHT:CancelScan() end
     if AHT:IsMatScanning() then AHT:CancelMatsScan() end
-    if AHT.IsMatsBuying and AHT:IsMatsBuying() then AHT:CancelMatsBuy(true) end
-    if AHT:IsBuying()      then AHT:CancelBuy() end
-    if AHT:IsPosting()     then AHT:CancelPost() end
-    if AHT.postPriceCheck and AHT.postPriceCheck.state ~= "done" then
-        AHT.postPriceCheck = nil
-    end
     AHT.sessionBought = {}
-    -- AH-Buttons verstecken (parent = UIParent, also kein Auto-Hide)
-    if AHT.scanButton  then AHT.scanButton:Hide() end
-    if AHT.matsButton  then AHT.matsButton:Hide() end
-    if AHT.getAllButton then AHT.getAllButton:Hide() end
+    -- AHT-Hauptfenster schließen
+    if ProjEP_AHT_MainFrame then ProjEP_AHT_MainFrame:Hide() end
+    -- AH-Buttons sind Kinder von AuctionFrame und verstecken sich automatisch
 end
 
 -- Diagnostik: Bestätigung dass Core.lua vollständig durchgelaufen ist

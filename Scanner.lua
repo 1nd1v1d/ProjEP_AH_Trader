@@ -35,120 +35,28 @@ AHT.MAX_RETRIES  = 2
 -- ── AH öffnen ────────────────────────────────────────────────
 function AHT:OnAHShow()
     AHT:RefreshAuctionQueryCaches()
-    local ok, err
-    ok, err = pcall(function() AHT:CreateScanButton() end)
-    if not ok then AHT:Print("ScanBtn Fehler: " .. tostring(err)) end
-    ok, err = pcall(function() AHT:CreateMatsButton() end)
-    if not ok then AHT:Print("MatsBtn Fehler: " .. tostring(err)) end
-    ok, err = pcall(function() AHT:CreateGetAllButton() end)
-    if not ok then AHT:Print("GetAllBtn Fehler: " .. tostring(err)) end
+    local ok, err = pcall(function() AHT:CreateAHTMainButton() end)
+    if not ok then AHT:Print("AHTMainBtn Fehler: " .. tostring(err)) end
 end
 
 -- ── AH-Buttons ────────────────────────────────────────────────
-function AHT:CreateScanButton()
-    if AHT.scanButton then AHT.scanButton:Show(); return end
-    local btn = CreateFrame("Button", "ProjEP_AHT_ScanBtn", UIParent, "UIPanelButtonTemplate")
-    btn:SetSize(130, 22)
-    btn:SetText(AHT.L["scan_button"])
+function AHT:CreateAHTMainButton()
+    if AHT.ahtMainButton then AHT.ahtMainButton:Show(); return end
+    local btn = CreateFrame("Button", "ProjEP_AHT_MainBtn", AuctionFrame, "UIPanelButtonTemplate")
+    btn:SetSize(110, 22)
+    btn:SetText("|cffffff00AH Trader|r")
     btn:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 70, -28)
-    btn:SetScript("OnClick", function(self)
-        if AHT:IsScanning() then AHT:CancelScan()
-        else
-            if #AHT.recipes > 0 then AHT:CalculateMargins() end
-            AHT:ShowUI()
-        end
+    btn:SetScript("OnClick", function()
+        AHT:ShowUI()
     end)
     btn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("ProjEP AH Trader")
-        if AHT:IsScanning() then
-            GameTooltip:AddLine(AHT.L["scan_tooltip_cancel"], 1, 0.5, 0.5)
-        else
-            GameTooltip:AddLine(AHT.L["scan_tooltip_open"], 1, 1, 1)
-            if #AHT.recipes == 0 then
-                GameTooltip:AddLine(AHT.L["scan_tooltip_no_recipes"])
-            else
-                GameTooltip:AddLine(string.format(AHT.L["scan_tooltip_ready"], #AHT.recipes))
-            end
-        end
+        GameTooltip:AddLine("ProjEP AH Trader", 1, 1, 0)
+        GameTooltip:AddLine("Öffnet das AH-Trader Fenster", 1, 1, 1)
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    AHT.scanButton = btn
-end
-
-function AHT:CreateMatsButton()
-    if AHT.matsButton then AHT.matsButton:Show(); return end
-    local btn = CreateFrame("Button", "ProjEP_AHT_MatsBtn", UIParent, "UIPanelButtonTemplate")
-    btn:SetSize(120, 22)
-    btn:SetText(AHT.L["mats_button"])
-    btn:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 207, -28)
-    btn:SetScript("OnClick", function(self)
-        if AHT:IsMatScanning() then AHT:CancelMatsScan()
-        else AHT:ShowMatsUI() end
-    end)
-    btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("ProjEP AH Trader – Mats")
-        if AHT:IsMatScanning() then
-            GameTooltip:AddLine(AHT.L["mats_tooltip_cancel"], 1, 0.5, 0.5)
-        else
-            GameTooltip:AddLine(AHT.L["mats_tooltip_open"], 1, 1, 1)
-            if AHT:TableCount(AHT.materials) == 0 then
-                GameTooltip:AddLine(AHT.L["mats_tooltip_no_materials"])
-            else
-                GameTooltip:AddLine(string.format(AHT.L["mats_tooltip_ready"],
-                    AHT:TableCount(AHT.materials)))
-            end
-        end
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    AHT.matsButton = btn
-end
-
-function AHT:CreateGetAllButton()
-    if AHT.getAllButton then AHT.getAllButton:Show(); return end
-    local btn = CreateFrame("Button", "ProjEP_AHT_GetAllBtn", UIParent, "UIPanelButtonTemplate")
-    btn:SetSize(130, 22)
-    btn:SetText(AHT.L["getall_ready_label"])
-    btn:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 334, -28)
-    btn:SetScript("OnClick", function(self)
-        if AHT.scanState == "getall_sent" or AHT.scanState == "getall_waiting" then
-            AHT:CancelScan()
-        else
-            AHT:StartGetAllScan()
-        end
-    end)
-    btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("ProjEP AH Trader – GetAll")
-        if AHT:CanGetAllScan() then
-            GameTooltip:AddLine("Gesamten AH in einem Scan erfassen", 1, 1, 1)
-        else
-            local r = AHT:GetAllRemainingCooldown()
-            GameTooltip:AddLine(string.format("Abklingzeit: %d:%02d",
-                math.floor(r/60), r%60), 1, 0.5, 0.5)
-        end
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    -- OnUpdate für Cooldown-Timer
-    btn:SetScript("OnUpdate", function(self, elapsed)
-        if not AHT:CanGetAllScan() then
-            local r = AHT:GetAllRemainingCooldown()
-            self:SetText(string.format(AHT.L["getall_cooldown_label"],
-                math.floor(r/60), r%60))
-            self:Disable()
-        elseif AHT.scanState == "getall_waiting" or AHT.scanState == "getall_sent" then
-            self:SetText(AHT.L["scan_cancel"])
-            self:Enable()
-        else
-            self:SetText(AHT.L["getall_ready_label"])
-            self:Enable()
-        end
-    end)
-    AHT.getAllButton = btn
+    AHT.ahtMainButton = btn
 end
 
 -- ── Scan-Status ───────────────────────────────────────────────

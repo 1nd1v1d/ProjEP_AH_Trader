@@ -98,9 +98,13 @@ local tabPanels = {}
 
 AHT.activeTab = AHT.activeTab or "alchemy"
 
+local alchemyElems     = {}
+local SetAlchemyVisible -- forward declaration
+
 local function ShowTab(tabId)
     AHT.activeTab = tabId
     scrollOffset  = 0
+    if SetAlchemyVisible then SetAlchemyVisible(tabId == "alchemy") end
     for _, t in ipairs(tabDefs) do
         local btn = tabBtns[t.id]
         if btn then
@@ -238,6 +242,7 @@ local function BuildAlchemyHeader()
                 AHT:RefreshUI()
             end)
             alcHeaderBtns[col.id] = btn
+            table.insert(alchemyElems, btn)
         else
             local fs = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             fs:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", col.x, HEADER_Y)
@@ -245,6 +250,7 @@ local function BuildAlchemyHeader()
             fs:SetJustifyH(col.id == "name" and "LEFT" or "RIGHT")
             fs:SetText("|cffffff00" .. lbl .. "|r")
             alcHeaderLabels[col.id] = fs
+            table.insert(alchemyElems, fs)
         end
     end
     local sep = mainFrame:CreateTexture(nil, "ARTWORK")
@@ -252,6 +258,7 @@ local function BuildAlchemyHeader()
     sep:SetPoint("TOPLEFT",  mainFrame, "TOPLEFT",  14,  HEADER_Y - 14)
     sep:SetPoint("TOPRIGHT", mainFrame, "TOPRIGHT", -14, HEADER_Y - 14)
     sep:SetHeight(1)
+    table.insert(alchemyElems, sep)
 end
 
 -- ── Alchemy-Tab: Datenzeilen ─────────────────────────────────
@@ -362,16 +369,13 @@ local function BuildAlchemyRows()
             local data = self._data
             if not data then return end
             if btn == "RightButton" then
-                if IsShiftKeyDown() then
-                    AHT:ShowPostDialog(data.name, data)
-                else
-                    AHT:ShowBuyDialog(data)
-                end
+                AHT:BuyMaterialsViaAuctionator(data)
             end
         end)
 
         row:Hide()
         rowFrames[i] = row
+        table.insert(alchemyElems, row)
     end
 end
 
@@ -403,13 +407,13 @@ local function BuildBottomButtons()
     end)
 
     local btnScan = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
-    btnScan:SetSize(120, 22)
-    btnScan:SetText(L["scan_button"])
+    btnScan:SetSize(140, 22)
+    btnScan:SetText(L["ui_start_analysis"])
     btnScan:SetPoint("BOTTOMLEFT", mainFrame, "BOTTOMLEFT", 182, 8)
     btnScan:SetScript("OnClick", function(self)
         if AHT:IsScanning() then
             AHT:CancelScan()
-            self:SetText(L["scan_button"])
+            self:SetText(L["ui_start_analysis"])
         else
             AHT:StartScan()
             if AHT:IsScanning() then self:SetText(L["scan_cancel"]) end
@@ -431,6 +435,18 @@ local function BuildBottomButtons()
     end)
     btnScan:SetScript("OnLeave", function() GameTooltip:Hide() end)
     AHT.uiScanButton = btnScan
+    table.insert(alchemyElems, btnAllOn)
+    table.insert(alchemyElems, btnAllOff)
+    table.insert(alchemyElems, btnScan)
+end
+
+SetAlchemyVisible = function(show)
+    for _, f in ipairs(alchemyElems) do
+        if show then f:Show() else f:Hide() end
+    end
+    if show then statusText:Show() else statusText:Hide() end
+    if show then recText:Show() else recText:Hide() end
+    if show then searchBox:Show() else searchBox:Hide() end
 end
 
 -- ── ShowUI / RefreshUI ────────────────────────────────────────
@@ -574,8 +590,10 @@ AHT.searchFilter = AHT.searchFilter or ""
 -- CRAFT-TAB HELPER – Gemeinsamer Aufbau für alle 4 Handwerks-Tabs
 -- ══════════════════════════════════════════════════════════════
 
+-- sel-Spalte + Textkolumnen
 local CRAFT_COL_DEFS = {
-    { id="name",   x=4,   w=230, align="LEFT"  },
+    { id="sel",    x=2,   w=18,  align="LEFT",  isCheck=true },
+    { id="name",   x=24,  w=210, align="LEFT"  },
     { id="cost",   x=237, w=100, align="RIGHT" },
     { id="sell",   x=340, w=100, align="RIGHT" },
     { id="profit", x=443, w=100, align="RIGHT" },
@@ -585,10 +603,12 @@ local CRAFT_COL_DEFS = {
 local CRAFT_ROW_H    = 20
 local CRAFT_MAX_ROWS = 12
 
-local function BuildCraftTab(panel)
+-- tabId wird übergeben damit Checkboxen das richtige selected-Table nutzen
+local function BuildCraftTab(panel, tabId)
     local L = AHT.L
     local hdrDefs = {
-        { label=L["ui_col_recipe"],  x=4,   w=230, align="LEFT"  },
+        { label="",                  x=2,   w=18,  align="LEFT"  },
+        { label=L["ui_col_recipe"],  x=24,  w=210, align="LEFT"  },
         { label=L["ui_col_cost"],    x=237, w=100, align="RIGHT" },
         { label=L["ui_col_sell"],    x=340, w=100, align="RIGHT" },
         { label=L["ui_col_profit"],  x=443, w=100, align="RIGHT" },
@@ -608,6 +628,15 @@ local function BuildCraftTab(panel)
     sep:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, -22)
     sep:SetHeight(1)
 
+    -- selectedTable für diesen Tab
+    local function getSelected()
+        if tabId == "blacksmithing"  then return AHT.bsSelected
+        elseif tabId == "tailoring"  then return AHT.tailSelected
+        elseif tabId == "leatherworking" then return AHT.lwSelected
+        elseif tabId == "engineering"    then return AHT.engSelected
+        else return {} end
+    end
+
     local rows = {}
     for i = 1, CRAFT_MAX_ROWS do
         local yOff = -26 - (i - 1) * CRAFT_ROW_H
@@ -622,13 +651,29 @@ local function BuildCraftTab(panel)
         end
         local c = {}
         for _, cd in ipairs(CRAFT_COL_DEFS) do
-            local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetPoint("LEFT", row, "LEFT", cd.x, 0)
-            fs:SetWidth(cd.w)
-            fs:SetJustifyH(cd.align)
-            c[cd.id] = fs
+            if cd.isCheck then
+                local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+                cb:SetSize(18, 18)
+                cb:SetPoint("LEFT", row, "LEFT", cd.x, 0)
+                cb._rowRef = row
+                cb:SetScript("OnClick", function(self)
+                    local d = self._rowRef._data
+                    if not d then return end
+                    local sel = getSelected()
+                    sel[d.name] = self:GetChecked() and true or false
+                    AHT:SaveDB()
+                end)
+                c[cd.id] = cb
+            else
+                local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetPoint("LEFT", row, "LEFT", cd.x, 0)
+                fs:SetWidth(cd.w)
+                fs:SetJustifyH(cd.align)
+                c[cd.id] = fs
+            end
         end
         row.cells = c
+        row._tabId = tabId
         row:EnableMouse(true)
         row:SetScript("OnEnter", function(self)
             local d = self._data
@@ -668,7 +713,7 @@ local function BuildCraftTab(panel)
     return rows
 end
 
-local function FillCraftRows(rows, display)
+local function FillCraftRows(rows, display, selectedTable)
     local L = AHT.L
     for i = 1, CRAFT_MAX_ROWS do
         local row = rows[i]
@@ -677,7 +722,13 @@ local function FillCraftRows(rows, display)
         if d then
             row._data = d
             local c   = row.cells
-            if c.name   then c.name:SetText(d.name) end
+            if c.sel then
+                c.sel:SetChecked(selectedTable[d.name] ~= false)
+            end
+            if c.name then
+                local dim = (selectedTable[d.name] == false) and "|cff888888" or ""
+                c.name:SetText(dim .. d.name .. (dim ~= "" and "|r" or ""))
+            end
             if c.cost   then c.cost:SetText(d.ingredCost and d.ingredCost > 0
                 and AHT:FormatMoneyPlain(d.ingredCost) or "|cff888888–|r") end
             if c.sell   then c.sell:SetText(d.sellPrice
@@ -702,28 +753,47 @@ local function FillCraftRows(rows, display)
     end
 end
 
-local function AddScanButton(panel, noRecKey, startFn)
+-- Fügt "Alle an", "Alle aus" und "Analyse starten" ans untere Ende des Panels
+local function AddProfessionButtons(panel, recipeTable, selectedTable, calcFn, refreshFn, scanFn, noRecKey)
     local L = AHT.L
-    local btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    btn:SetSize(130, 22)
-    btn:SetText(L["scan_button"])
-    btn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 4)
-    btn:SetScript("OnClick", function(self)
+
+    local btnAllOn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    btnAllOn:SetSize(80, 22)
+    btnAllOn:SetText(L["ui_all_on"])
+    btnAllOn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 4)
+    btnAllOn:SetScript("OnClick", function()
+        for _, r in ipairs(recipeTable) do selectedTable[r.name] = true end
+        AHT:SaveDB(); calcFn(); refreshFn()
+    end)
+
+    local btnAllOff = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    btnAllOff:SetSize(80, 22)
+    btnAllOff:SetText(L["ui_all_off"])
+    btnAllOff:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 84, 4)
+    btnAllOff:SetScript("OnClick", function()
+        for _, r in ipairs(recipeTable) do selectedTable[r.name] = false end
+        AHT:SaveDB(); calcFn(); refreshFn()
+    end)
+
+    local btnAnalyse = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    btnAnalyse:SetSize(140, 22)
+    btnAnalyse:SetText(L["ui_start_analysis"])
+    btnAnalyse:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+    btnAnalyse:SetScript("OnClick", function(self)
         if AHT:IsScanning() then
             AHT:CancelScan()
-            self:SetText(L["scan_button"])
+            self:SetText(L["ui_start_analysis"])
         else
-            startFn()
+            scanFn()
             if AHT:IsScanning() then self:SetText(L["scan_cancel"]) end
         end
     end)
 
     local noRecLbl = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    noRecLbl:SetPoint("CENTER", panel, "CENTER", 0, 0)
+    noRecLbl:SetPoint("CENTER", panel, "CENTER", 0, 20)
     noRecLbl:SetText(L[noRecKey] or noRecKey)
     noRecLbl:SetTextColor(1, 0.5, 0)
     panel._noRecLbl = noRecLbl
-    return btn
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -738,15 +808,20 @@ function AHT:RefreshBlacksmithingTab()
     if not panel or not panel:IsVisible() then return end
 
     if not bsCreated then
-        bsCreated  = true
-        bsRowFrames = BuildCraftTab(panel)
-        AddScanButton(panel, "bs_no_recipes", function() AHT:StartBlacksmithingScan() end)
+        bsCreated   = true
+        bsRowFrames = BuildCraftTab(panel, "blacksmithing")
+        AddProfessionButtons(panel,
+            AHT.bsRecipes, AHT.bsSelected,
+            function() AHT:CalculateBlacksmithingMargins() end,
+            function() AHT:RefreshBlacksmithingTab() end,
+            function() AHT:StartBlacksmithingScan() end,
+            "bs_no_recipes")
     end
 
     if panel._noRecLbl then
-        panel._noRecLbl:SetShown(#AHT.bsRecipes == 0)
+        if #AHT.bsRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(bsRowFrames, AHT.bsDisplayResults or {})
+    FillCraftRows(bsRowFrames, AHT.bsDisplayResults or {}, AHT.bsSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -762,14 +837,19 @@ function AHT:RefreshTailoringTab()
 
     if not tailCreated then
         tailCreated   = true
-        tailRowFrames = BuildCraftTab(panel)
-        AddScanButton(panel, "tail_no_recipes", function() AHT:StartTailoringScan() end)
+        tailRowFrames = BuildCraftTab(panel, "tailoring")
+        AddProfessionButtons(panel,
+            AHT.tailRecipes, AHT.tailSelected,
+            function() AHT:CalculateTailoringMargins() end,
+            function() AHT:RefreshTailoringTab() end,
+            function() AHT:StartTailoringScan() end,
+            "tail_no_recipes")
     end
 
     if panel._noRecLbl then
-        panel._noRecLbl:SetShown(#AHT.tailRecipes == 0)
+        if #AHT.tailRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(tailRowFrames, AHT.tailDisplayResults or {})
+    FillCraftRows(tailRowFrames, AHT.tailDisplayResults or {}, AHT.tailSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -785,14 +865,19 @@ function AHT:RefreshLeatherworkingTab()
 
     if not lwCreated then
         lwCreated   = true
-        lwRowFrames = BuildCraftTab(panel)
-        AddScanButton(panel, "lw_no_recipes", function() AHT:StartLeatherworkingScan() end)
+        lwRowFrames = BuildCraftTab(panel, "leatherworking")
+        AddProfessionButtons(panel,
+            AHT.lwRecipes, AHT.lwSelected,
+            function() AHT:CalculateLeatherworkingMargins() end,
+            function() AHT:RefreshLeatherworkingTab() end,
+            function() AHT:StartLeatherworkingScan() end,
+            "lw_no_recipes")
     end
 
     if panel._noRecLbl then
-        panel._noRecLbl:SetShown(#AHT.lwRecipes == 0)
+        if #AHT.lwRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(lwRowFrames, AHT.lwDisplayResults or {})
+    FillCraftRows(lwRowFrames, AHT.lwDisplayResults or {}, AHT.lwSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -808,14 +893,19 @@ function AHT:RefreshEngineeringTab()
 
     if not engCreated then
         engCreated   = true
-        engRowFrames = BuildCraftTab(panel)
-        AddScanButton(panel, "eng_no_recipes", function() AHT:StartEngineeringScan() end)
+        engRowFrames = BuildCraftTab(panel, "engineering")
+        AddProfessionButtons(panel,
+            AHT.engRecipes, AHT.engSelected,
+            function() AHT:CalculateEngineeringMargins() end,
+            function() AHT:RefreshEngineeringTab() end,
+            function() AHT:StartEngineeringScan() end,
+            "eng_no_recipes")
     end
 
     if panel._noRecLbl then
-        panel._noRecLbl:SetShown(#AHT.engRecipes == 0)
+        if #AHT.engRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(engRowFrames, AHT.engDisplayResults or {})
+    FillCraftRows(engRowFrames, AHT.engDisplayResults or {}, AHT.engSelected)
 end
 
 -- ── Mats-Tab ─────────────────────────────────────────────────
@@ -926,7 +1016,7 @@ function AHT:RefreshMatsTab()
             row:EnableMouse(true)
             row:SetScript("OnClick", function(self, btn)
                 if btn == "RightButton" and self._data then
-                    AHT:ShowMatsBuyDialog(self._data)
+                    AHT:BuyMaterialsViaAuctionator(self._data)
                 end
             end)
             row:Hide()
