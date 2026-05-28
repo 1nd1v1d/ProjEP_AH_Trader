@@ -49,6 +49,12 @@ AHT.matsSortDir        = "desc"
 AHT.matsSearchFilter   = ""
 AHT.matsButton         = nil
 AHT.matsOfferCache     = {}
+AHT.herbSelected       = {}
+AHT.herbResults        = {}
+AHT.herbDisplayResults = {}
+AHT.herbSearchFilter   = ""
+AHT.herbSortMode       = "name"
+AHT.herbSortDir        = "asc"
 
 -- ── Schmiedekunst ─────────────────────────────────────────────
 AHT.bsRecipes        = {}
@@ -104,6 +110,101 @@ AHT.MAT_CATEGORY_IDS = {
     { id = 12, key = "cat_glyph"      },
 }
 
+AHT.HERB_CATEGORY_ID = 5
+
+AHT.HERB_NAMES_EN = {
+    "Adder's Tongue",
+    "Ancient Lichen",
+    "Arthas' Tears",
+    "Black Lotus",
+    "Blindweed",
+    "Briarthorn",
+    "Bruiseweed",
+    "Deadnettle",
+    "Dreamfoil",
+    "Dreaming Glory",
+    "Earthroot",
+    "Fadeleaf",
+    "Felweed",
+    "Firebloom",
+    "Flame Cap",
+    "Ghost Mushroom",
+    "Goldclover",
+    "Golden Sansam",
+    "Goldthorn",
+    "Gromsblood",
+    "Icecap",
+    "Icethorn",
+    "Khadgar's Whisker",
+    "Kingsblood",
+    "Lichbloom",
+    "Liferoot",
+    "Mana Thistle",
+    "Mageroyal",
+    "Mountain Silversage",
+    "Netherbloom",
+    "Nightmare Vine",
+    "Peacebloom",
+    "Plaguebloom",
+    "Purple Lotus",
+    "Ragveil",
+    "Silverleaf",
+    "Stranglekelp",
+    "Sungrass",
+    "Talandra's Rose",
+    "Terocone",
+    "Tiger Lily",
+    "Wild Steelbloom",
+    "Wintersbite",
+}
+
+AHT.HERB_NAMES_DE = {
+    "Arthastranen",
+    "Blindkraut",
+    "Blutdistel",
+    "Bruuzkraut",
+    "Eisdorn",
+    "Eiskappe",
+    "Erdwurzel",
+    "Feuerblume",
+    "Friedensblume",
+    "Geisterpilz",
+    "Goldclover",
+    "Goldener Sansam",
+    "Goldklee",
+    "Goldstachelbeere",
+    "Graues Kraut",
+    "Khadgars Schnurrbart",
+    "Königsblut",
+    "Lebenswurz",
+    "Lichblüte",
+    "Maguskönigskraut",
+    "Matschkraut",
+    "Netherblüte",
+    "Otterngras",
+    "Peitscherwurzel",
+    "Pestblüte",
+    "Purpurlotus",
+    "Silberblatt",
+    "Sonnengras",
+    "Talandras Rose",
+    "Taubnessel",
+    "Teufelsgras",
+    "Tigerlilie",
+    "Traumblatt",
+    "Traumwinde",
+    "Traumwinde-Ranke",
+    "Traumwindewein",
+    "Traumwindenblatt",
+    "Traumwurz",
+    "Uralter Flechte",
+    "Wilddornrose",
+    "Wildstahlblume",
+    "Winterbiss",
+    "Zauberlotus",
+    "Zottelkappe",
+}
+
 -- ── Vendor-Preise (WotLK) ─────────────────────────────────────
 -- In WotLK gibt es keine Phiolen mehr für die meisten Northrend-Tränke.
 -- Parchments werden von Händlern gekauft (für Inscription).
@@ -116,17 +217,28 @@ AHT.vendorPrices = {
     ["Leichtes Pergament"]  = 25,
     ["Normales Pergament"]  = 50,
     ["Schweres Pergament"]  = 100,
-    -- Vanilla-Phiolen (für TBC/Vanilla Rezepte die noch gelernt wurden)
-    ["Crystal Vial"]       = 18,
-    ["Leaded Vial"]        = 180,
+    -- Vanilla-Phiolen. Die Händleranzeige im Spiel zeigt bei mehreren Vials
+    -- Bündelpreise für 5 Stück; die Kosten werden deshalb über vendorStacks
+    -- exakt auf Reagenzanzahl umgerechnet.
+    ["Crystal Vial"]       = 425,
+    ["Leaded Vial"]        = 34,
     ["Imbued Vial"]        = 2250,
     ["Enchanted Vial"]     = 27000,
-    ["Empty Vial"]         = 1,
-    ["Kristallphiole"]     = 18,
-    ["Gesprungene Phiole"] = 180,
+    ["Empty Vial"]         = 3,
+    ["Kristallphiole"]     = 425,
+    ["Gesprungene Phiole"] = 34,
     ["Besudelte Phiole"]   = 2250,
     ["Geschmolzene Phiole"] = 27000,
-    ["Leere Phiole"]       = 1,
+    ["Leere Phiole"]       = 3,
+}
+
+AHT.vendorStacks = {
+    ["Crystal Vial"]       = { price = 2125, quantity = 5 },
+    ["Leaded Vial"]        = { price = 170,  quantity = 5 },
+    ["Empty Vial"]         = { price = 17,   quantity = 5 },
+    ["Kristallphiole"]     = { price = 2125, quantity = 5 },
+    ["Gesprungene Phiole"] = { price = 170,  quantity = 5 },
+    ["Leere Phiole"]       = { price = 17,   quantity = 5 },
 }
 
 -- ── Hilfsfunktionen ──────────────────────────────────────────
@@ -325,6 +437,22 @@ function AHT:IsVendorItem(name)
     return AHT.vendorPrices[name] ~= nil
 end
 
+function AHT:GetVendorUnitPrice(name)
+    return AHT.vendorPrices[name]
+end
+
+function AHT:GetVendorTotalCost(name, count)
+    local qty = count or 1
+    local bundle = AHT.vendorStacks[name]
+    if bundle and bundle.quantity and bundle.quantity > 0 then
+        return math.floor((bundle.price * qty / bundle.quantity) + 0.5)
+    end
+
+    local unitPrice = AHT.vendorPrices[name]
+    if unitPrice == nil then return nil end
+    return unitPrice * qty
+end
+
 -- ── Materialien-Management ────────────────────────────────────
 function AHT:AddMaterial(itemName, categoryId)
     if not itemName or itemName == "" then return end
@@ -366,6 +494,20 @@ function AHT:GetMaterialsList()
     end
     table.sort(list)
     return list
+end
+
+function AHT:GetHerbList()
+    local source = (GetLocale and GetLocale() == "deDE") and AHT.HERB_NAMES_DE or AHT.HERB_NAMES_EN
+    local list = {}
+    for _, name in ipairs(source) do
+        list[#list + 1] = name
+    end
+    table.sort(list)
+    return list
+end
+
+function AHT:GetHerbCategoryId()
+    return AHT.HERB_CATEGORY_ID
 end
 
 -- ── Rezepta-Debugausgabe ─────────────────────────────────────
@@ -505,6 +647,7 @@ function AHT:OnLoad()
         AHT.matsSelected   = ProjEP_AHT_DB.matsSelected   or {}
         AHT.matsCategories = ProjEP_AHT_DB.matsCategories or {}
         AHT.matsHistory    = ProjEP_AHT_DB.matsHistory    or {}
+        AHT.herbSelected   = ProjEP_AHT_DB.herbSelected   or {}
         AHT.getAllLastTime  = ProjEP_AHT_DB.getAllLastTime  or 0
         AHT.bsSelected     = ProjEP_AHT_DB.bsSelected     or {}
         AHT.tailSelected   = ProjEP_AHT_DB.tailSelected   or {}
@@ -524,6 +667,11 @@ function AHT:OnLoad()
     -- Vendor-Preise eintragen
     for name, price in pairs(AHT.vendorPrices) do
         AHT.prices[name] = price
+    end
+    for _, herbName in ipairs(AHT:GetHerbList()) do
+        if AHT.herbSelected[herbName] == nil then
+            AHT.herbSelected[herbName] = true
+        end
     end
     AHT:Print(string.format(AHT.L["addon_loaded"], AHT.VERSION))
 
@@ -555,6 +703,7 @@ function AHT:SaveDB()
     ProjEP_AHT_DB.matsSelected   = AHT.matsSelected
     ProjEP_AHT_DB.matsCategories = AHT.matsCategories
     ProjEP_AHT_DB.matsHistory    = AHT.matsHistory
+    ProjEP_AHT_DB.herbSelected   = AHT.herbSelected
     ProjEP_AHT_DB.getAllLastTime  = AHT.getAllLastTime
     ProjEP_AHT_DB.bsSelected     = AHT.bsSelected
     ProjEP_AHT_DB.tailSelected   = AHT.tailSelected

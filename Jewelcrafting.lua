@@ -193,9 +193,11 @@ function AHT:CalculateGemCutMargins()
         local missingReag = {}
 
         for _, reag in ipairs(cut.reagents) do
-            local p = AHT.vendorPrices[reag.name] or AHT.prices[reag.name]
+            local p = AHT:GetVendorUnitPrice(reag.name) or AHT.prices[reag.name]
             if p then
-                ingredCost = ingredCost + p * reag.count
+                ingredCost = ingredCost + (AHT:IsVendorItem(reag.name)
+                    and AHT:GetVendorTotalCost(reag.name, reag.count)
+                    or (p * reag.count))
             else
                 allFound = false
                 table.insert(missingReag, reag.name)

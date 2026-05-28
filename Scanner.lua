@@ -447,32 +447,66 @@ AHT.matsCurrentPage   = 0
 AHT.matsScanMinPrices = {}
 AHT.matsScanListingCounts = {}
 AHT.matsScanOffers    = {}
+AHT.matsScanMode      = "mats"
 
 function AHT:IsMatScanning()
     return AHT.matsScanState and AHT.matsScanState ~= "idle" or false
 end
 
-function AHT:StartMatsScan()
+local function BuildSelectedQueue(itemNames, selectedTable)
+    local queue = {}
+    for _, name in ipairs(itemNames) do
+        if selectedTable[name] ~= false then
+            table.insert(queue, name)
+        end
+    end
+    return queue
+end
+
+local function GetMatScanLocaleKeys(mode)
+    if mode == "herbs" then
+        return {
+            noItems   = "herbs_no_selected",
+            start     = "herbs_scan_start",
+            complete  = "herbs_scan_complete",
+            cancelled = "herbs_scan_cancelled",
+            button    = "herbs_btn_scan",
+            cancel    = "herbs_cancel",
+        }
+    end
+    return {
+        noItems   = "mats_no_selected",
+        start     = "mats_scan_start",
+        complete  = "mats_scan_complete",
+        cancelled = "mats_scan_cancelled",
+        button    = "mats_button",
+        cancel    = "mats_cancel",
+    }
+end
+
+local function UpdateMatScanButtons(mode, text)
+    if AHT.matsScanBtn and (not mode or mode == "mats") then
+        AHT.matsScanBtn:SetText(text)
+    end
+    if AHT.herbTabScanBtn and (not mode or mode == "herbs") then
+        AHT.herbTabScanBtn:SetText(text)
+    end
+end
+
+local function StartTrackedMatScan(mode, queue)
+    local keys = GetMatScanLocaleKeys(mode)
+
     if AHT:IsMatScanning() then
         AHT:Print(AHT.L["mats_scan_already_running"]); return
     end
     if not AuctionFrame or not AuctionFrame:IsVisible() then
         AHT:Print(AHT.L["scan_ah_required"]); return
     end
-    if AHT:TableCount(AHT.materials) == 0 then
-        AHT:Print(AHT.L["mats_no_materials"]); return
-    end
-
-    local queue = {}
-    for name in pairs(AHT.materials) do
-        if AHT.matsSelected[name] ~= false then
-            table.insert(queue, name)
-        end
-    end
     if #queue == 0 then
-        AHT:Print(AHT.L["mats_no_selected"]); return
+        AHT:Print(AHT.L[keys.noItems]); return
     end
 
+    AHT.matsScanMode          = mode
     AHT.matsScanQueue         = queue
     AHT.matsScanQueueIdx      = 0
     AHT.matsScanMinPrices     = {}
@@ -482,16 +516,30 @@ function AHT:StartMatsScan()
     AHT.matsScanTimer         = 0
     AHT.matsSentTimer         = 0
 
-    AHT:Print(string.format(AHT.L["mats_scan_start"], #queue))
-    if AHT.matsScanBtn then AHT.matsScanBtn:SetText(AHT.L["mats_cancel"]) end
+    AHT:Print(string.format(AHT.L[keys.start], #queue))
+    UpdateMatScanButtons(mode, AHT.L[keys.cancel])
     AHT:AdvanceMatsScanQueue()
+end
+
+function AHT:StartMatsScan()
+    if AHT:TableCount(AHT.materials) == 0 then
+        AHT:Print(AHT.L["mats_no_materials"]); return
+    end
+    local queue = BuildSelectedQueue(AHT:GetMaterialsList(), AHT.matsSelected)
+    StartTrackedMatScan("mats", queue)
+end
+
+function AHT:StartHerbScan()
+    local queue = BuildSelectedQueue(AHT:GetHerbList(), AHT.herbSelected)
+    StartTrackedMatScan("herbs", queue)
 end
 
 function AHT:CancelMatsScan()
     if not AHT:IsMatScanning() then return end
-    AHT:Print(AHT.L["mats_scan_cancelled"])
+    local keys = GetMatScanLocaleKeys(AHT.matsScanMode)
+    AHT:Print(AHT.L[keys.cancelled])
     AHT.matsScanState = "idle"
-    if AHT.matsScanBtn then AHT.matsScanBtn:SetText(AHT.L["mats_button"]) end
+    UpdateMatScanButtons(AHT.matsScanMode, AHT.L[keys.button])
     AHT:SaveDB()
 end
 
@@ -519,8 +567,12 @@ function AHT:OnUpdateMats(elapsed)
         if AHT.matsScanTimer >= AHT.SCAN_DELAY then
             AHT.matsScanTimer = 0
             if CanSendAuctionQuery() then
+                local preferredCategory = nil
+                if AHT.matsScanMode ~= "herbs" then
+                    preferredCategory = AHT:GetMatCategoryId(AHT.matsCurrentItem)
+                end
                 local _, ci, si = AHT:GetAuctionQueryFilters(
-                    AHT.matsCurrentItem, AHT:GetMatCategoryId(AHT.matsCurrentItem))
+                    AHT.matsCurrentItem, preferredCategory)
                 AHT.matsSentTimer = 0
                 AHT.matsScanState = "sent"
                 QueryAuctionItems(AHT.matsCurrentItem, nil, nil, nil, ci, si,
@@ -602,12 +654,14 @@ function AHT:OnMatsScanComplete()
     end
     AHT:SaveDB()
     AHT:CalculateMatsMargins()
+    AHT:CalculateHerbMargins()
     AHT:RefreshMatsUI()
     if AHT.matsBuyDialog and AHT.matsBuyDialog:IsVisible() then
         AHT:RefreshMatsBuyDialogAfterScan()
     end
-    AHT:Print(string.format(AHT.L["mats_scan_complete"], AHT:TableCount(AHT.matsScanMinPrices)))
-    if AHT.matsScanBtn then AHT.matsScanBtn:SetText(AHT.L["mats_button"]) end
+    local keys = GetMatScanLocaleKeys(AHT.matsScanMode)
+    AHT:Print(string.format(AHT.L[keys.complete], AHT:TableCount(AHT.matsScanMinPrices)))
+    UpdateMatScanButtons(AHT.matsScanMode, AHT.L[keys.button])
 end
 
 -- ── Hilfsfunktionen ──────────────────────────────────────────

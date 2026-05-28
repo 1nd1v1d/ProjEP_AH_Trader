@@ -6,7 +6,8 @@
 --   3. Schneiderei    – Stoff-Analyse
 --   4. Lederverarb.   – Leder-Analyse
 --   5. Ingenieurskunst– Technik-Analyse
---   6. Materialien    – Rohstoff-Preis-Abweichung
+--   6. Kräuter        – Kräuter-Preisübersicht + Kauf
+--   7. Materialien    – Rohstoff-Preis-Abweichung
 -- WotLK 3.3.5 / Lua 5.1 (Project Epoch)
 -- ============================================================
 
@@ -22,18 +23,21 @@ local HEADER_Y    = -75
 local FIRST_ROW_Y = -96
 
 local scrollOffset = 0
+local herbsTabScrollOff
+local HERBS_TAB_MAX_ROWS
 
 -- ── Spaltendefinitionen (Alchemie-Tab) ───────────────────────
 local ALCHEMY_COLS = {
     { id="sel",    label="",  w=18,  x=12,  sortable=false },
     { id="rank",   label="#", w=20,  x=32,  sortable=false },
-    { id="name",   label="",  w=175, x=55,  sortable=false },
-    { id="cost",   label="",  w=90,  x=233, sortable=false },
-    { id="sell",   label="",  w=90,  x=326, sortable=false },
-    { id="fee",    label="",  w=75,  x=419, sortable=false },
-    { id="profit", label="",  w=90,  x=497, sortable=true  },
-    { id="margin", label="",  w=55,  x=590, sortable=true  },
-    { id="upd",    label="",  w=90,  x=650, sortable=false },
+    { id="name",   label="",  w=160, x=55,  sortable=false },
+    { id="cost",   label="",  w=85,  x=218, sortable=false },
+    { id="sell",   label="",  w=85,  x=306, sortable=false },
+    { id="avg",    label="",  w=70,  x=394, sortable=false },
+    { id="profit", label="",  w=85,  x=467, sortable=true  },
+    { id="margin", label="",  w=50,  x=555, sortable=true  },
+    { id="vol",    label="",  w=55,  x=608, sortable=false },
+    { id="upd",    label="",  w=65,  x=666, sortable=false },
 }
 
 -- ── Hauptframe ───────────────────────────────────────────────
@@ -66,6 +70,19 @@ mainFrame:SetScript("OnMouseWheel", function(self, delta)
                 scrollOffset = scrollOffset + 1; AHT:RefreshUI()
             end
         end
+    elseif AHT.activeTab == "herbs" then
+        local display = AHT.herbDisplayResults or {}
+        if delta > 0 then
+            if herbsTabScrollOff > 0 then
+                herbsTabScrollOff = herbsTabScrollOff - 1
+                AHT:RefreshHerbsTab()
+            end
+        else
+            if herbsTabScrollOff + HERBS_TAB_MAX_ROWS < #display then
+                herbsTabScrollOff = herbsTabScrollOff + 1
+                AHT:RefreshHerbsTab()
+            end
+        end
     end
 end)
 
@@ -90,6 +107,7 @@ local tabDefs = {
     { id="tailoring",     labelKey="tab_tailoring"     },
     { id="leatherworking",labelKey="tab_leatherworking"},
     { id="engineering",   labelKey="tab_engineering"   },
+    { id="herbs",         labelKey="tab_herbs"         },
     { id="mats",          labelKey="tab_mats"          },
 }
 
@@ -137,6 +155,9 @@ local function ShowTab(tabId)
     elseif tabId == "engineering" then
         AHT:CalculateEngineeringMargins()
         AHT:RefreshEngineeringTab()
+    elseif tabId == "herbs" then
+        AHT:CalculateHerbMargins()
+        AHT:RefreshHerbsTab()
     elseif tabId == "mats" then
         AHT:CalculateMatsMargins()
         AHT:RefreshMatsTab()
@@ -148,7 +169,7 @@ local function EnsureTabsCreated()
     if tabBtnsCreated then return end
     tabBtnsCreated = true
     local L    = AHT.L
-    local tabW = 120
+    local tabW = math.floor((FRAME_W - 24 - ((#tabDefs - 1) * 4)) / #tabDefs)
     local tabX = 12
     for _, t in ipairs(tabDefs) do
         local btn = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
@@ -210,9 +231,10 @@ local function BuildAlchemyHeader()
         name   = "ui_col_recipe",
         cost   = "ui_col_cost",
         sell   = "ui_col_sell",
-        fee    = "ui_col_ahfee",
+        avg    = "ui_col_average",
         profit = "ui_col_profit",
         margin = "ui_col_margin",
+        vol    = "ui_col_listings",
         upd    = "ui_col_updated",
     }
     for _, col in ipairs(ALCHEMY_COLS) do
@@ -317,12 +339,13 @@ local function BuildAlchemyRows()
             if data.reagents and #data.reagents > 0 then
                 GameTooltip:AddLine(L["tt_ingredients"], 1, 1, 0)
                 for _, reag in ipairs(data.reagents) do
-                    local p = AHT.prices[reag.name] or 0
                     local vendor = AHT:IsVendorItem(reag.name)
+                    local total = vendor and AHT:GetVendorTotalCost(reag.name, reag.count)
+                        or ((AHT.prices[reag.name] or 0) * reag.count)
                     local src    = vendor and L["tt_source_vendor"] or L["tt_source_ah"]
                     GameTooltip:AddDoubleLine(
                         string.format("  %dx %s (%s)", reag.count, reag.name, src),
-                        AHT:FormatMoney(p * reag.count), 0.9, 0.9, 0.9, 1, 1, 0)
+                        AHT:FormatMoney(total), 0.9, 0.9, 0.9, 1, 1, 0)
                 end
             end
             if data.sellPrice then
@@ -331,7 +354,7 @@ local function BuildAlchemyRows()
             if data.avgSellPrice then
                 GameTooltip:AddDoubleLine(L["tt_avg_price"], AHT:FormatMoney(data.avgSellPrice), 1,1,1, 0.7,0.7,0.7)
             end
-            if data.volume then
+            if data.volume ~= nil then
                 GameTooltip:AddDoubleLine(L["tt_volume"], tostring(data.volume), 1,1,1, 0.8,0.8,0.8)
             end
             if data.provision then
@@ -539,9 +562,9 @@ function AHT:RefreshUI()
                 cells.sell:SetText(r.sellPrice
                     and AHT:FormatMoneyPlain(r.sellPrice) or L["ui_not_on_ah"])
             end
-            if cells.fee then
-                local fee = (r.provision or 0) + (r.deposit or 0)
-                cells.fee:SetText(fee > 0 and AHT:FormatMoneyPlain(fee) or "|cff888888–|r")
+            if cells.avg then
+                cells.avg:SetText(r.avgSellPrice
+                    and AHT:FormatMoneyPlain(r.avgSellPrice) or "|cff888888–|r")
             end
             if cells.profit then
                 if r.profit then
@@ -559,6 +582,9 @@ function AHT:RefreshUI()
                 else
                     cells.margin:SetText("|cff888888–|r")
                 end
+            end
+            if cells.vol then
+                cells.vol:SetText(tostring(r.volume or 0))
             end
             if cells.upd then
                 local p = AHT.priceUpdated and AHT.priceUpdated[r.name]
@@ -593,11 +619,12 @@ AHT.searchFilter = AHT.searchFilter or ""
 -- sel-Spalte + Textkolumnen
 local CRAFT_COL_DEFS = {
     { id="sel",    x=2,   w=18,  align="LEFT",  isCheck=true },
-    { id="name",   x=24,  w=210, align="LEFT"  },
-    { id="cost",   x=237, w=100, align="RIGHT" },
-    { id="sell",   x=340, w=100, align="RIGHT" },
-    { id="profit", x=443, w=100, align="RIGHT" },
-    { id="margin", x=546, w=80,  align="RIGHT" },
+    { id="name",   x=24,  w=200, align="LEFT"  },
+    { id="cost",   x=227, w=95,  align="RIGHT" },
+    { id="sell",   x=325, w=95,  align="RIGHT" },
+    { id="profit", x=423, w=95,  align="RIGHT" },
+    { id="margin", x=521, w=70,  align="RIGHT" },
+    { id="list",   x=594, w=60,  align="RIGHT" },
 }
 
 local CRAFT_ROW_H    = 20
@@ -608,11 +635,12 @@ local function BuildCraftTab(panel, tabId)
     local L = AHT.L
     local hdrDefs = {
         { label="",                  x=2,   w=18,  align="LEFT"  },
-        { label=L["ui_col_recipe"],  x=24,  w=210, align="LEFT"  },
-        { label=L["ui_col_cost"],    x=237, w=100, align="RIGHT" },
-        { label=L["ui_col_sell"],    x=340, w=100, align="RIGHT" },
-        { label=L["ui_col_profit"],  x=443, w=100, align="RIGHT" },
-        { label=L["ui_col_margin"],  x=546, w=80,  align="RIGHT" },
+        { label=L["ui_col_recipe"],  x=24,  w=200, align="LEFT"  },
+        { label=L["ui_col_cost"],    x=227, w=95,  align="RIGHT" },
+        { label=L["ui_col_sell"],    x=325, w=95,  align="RIGHT" },
+        { label=L["ui_col_profit"],  x=423, w=95,  align="RIGHT" },
+        { label=L["ui_col_margin"],  x=521, w=70,  align="RIGHT" },
+        { label=L["ui_col_listings"],x=594, w=60,  align="RIGHT" },
     }
     for _, h in ipairs(hdrDefs) do
         local fs = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -684,16 +712,20 @@ local function BuildCraftTab(panel, tabId)
             if d.reagents then
                 GameTooltip:AddLine(L["tt_ingredients"], 1, 1, 0)
                 for _, reag in ipairs(d.reagents) do
-                    local p = AHT.prices[reag.name] or 0
                     local isVend = AHT:IsVendorItem(reag.name)
+                    local total = isVend and AHT:GetVendorTotalCost(reag.name, reag.count)
+                        or ((AHT.prices[reag.name] or 0) * reag.count)
                     local src = isVend and L["tt_source_vendor"] or L["tt_source_ah"]
                     GameTooltip:AddDoubleLine(
                         string.format("  %dx %s (%s)", reag.count, reag.name, src),
-                        AHT:FormatMoney(p * reag.count), 0.9,0.9,0.9, 1,1,0)
+                        AHT:FormatMoney(total), 0.9,0.9,0.9, 1,1,0)
                 end
             end
             if d.sellPrice then
                 GameTooltip:AddDoubleLine(L["tt_sell_price"], AHT:FormatMoney(d.sellPrice), 1,1,1, 0,1,0)
+            end
+            if d.volume ~= nil then
+                GameTooltip:AddDoubleLine(L["tt_volume"], tostring(d.volume), 1,1,1, 0.8,0.8,0.8)
             end
             if d.profit then
                 local cr = d.profit > 0 and 0 or 1
@@ -746,6 +778,7 @@ local function FillCraftRows(rows, display, selectedTable)
                     c.margin:SetText(string.format("|c%s%.0f%%|r", col, d.margin))
                 else c.margin:SetText("|cff888888–|r") end
             end
+            if c.list then c.list:SetText(tostring(d.volume or 0)) end
             row:Show()
         else
             row._data = nil; row:Hide()
@@ -915,6 +948,28 @@ local matsTabScrollOff  = 0
 local MATS_TAB_ROW_H    = 20
 local MATS_TAB_MAX_ROWS = 12
 
+local herbsTabCreated    = false
+local herbsTabRowFrames  = {}
+herbsTabScrollOff        = 0
+local HERBS_TAB_ROW_H    = 20
+HERBS_TAB_MAX_ROWS       = 12
+local herbsHeaderBtns    = {}
+
+local function ToggleHerbSort(mode)
+    if AHT.herbSortMode == mode then
+        AHT.herbSortDir = AHT.herbSortDir == "asc" and "desc" or "asc"
+    else
+        AHT.herbSortMode = mode
+        if mode == "name" then
+            AHT.herbSortDir = "asc"
+        else
+            AHT.herbSortDir = "desc"
+        end
+    end
+    herbsTabScrollOff = 0
+    AHT:RefreshHerbsTab()
+end
+
 function AHT:RefreshMatsTab()
     if not mainFrame:IsVisible() then return end
     local panel = tabPanels["mats"]
@@ -1053,6 +1108,259 @@ function AHT:RefreshMatsTab()
         else
             row._data = nil; row:Hide()
         end
+    end
+end
+
+function AHT:RefreshHerbsTab()
+    if not mainFrame:IsVisible() then return end
+    local panel = tabPanels["herbs"]
+    if not panel or not panel:IsVisible() then return end
+
+    local L = AHT.L
+
+    if not herbsTabCreated then
+        local hdr = {
+            { id="name",     label=L["herbs_col_name"],      x=28,  w=170, align="LEFT"  },
+            { id="current",  label=L["herbs_col_current"],   x=201, w=95,  align="RIGHT" },
+            { id="avg",      label=L["herbs_col_avg"],       x=299, w=95,  align="RIGHT" },
+            { id="deviation",label=L["herbs_col_deviation"], x=397, w=85,  align="RIGHT" },
+            { id="listings", label=L["herbs_col_listings"],  x=485, w=60,  align="RIGHT" },
+            { id="history",  label=L["herbs_col_scans"],     x=548, w=60,  align="RIGHT" },
+        }
+        for _, h in ipairs(hdr) do
+            local btn = CreateFrame("Button", nil, panel)
+            btn:SetPoint("TOPLEFT", panel, "TOPLEFT", h.x - 2, -3)
+            btn:SetSize(h.w + 4, 16)
+            local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            fs:SetAllPoints(btn)
+            fs:SetJustifyH(h.align)
+            fs:SetText("|cffffff00" .. h.label .. "|r")
+            btn:SetScript("OnClick", function()
+                ToggleHerbSort(h.id)
+            end)
+            btn._label = h.label
+            btn._sortId = h.id
+            btn._fs = fs
+            herbsHeaderBtns[h.id] = btn
+        end
+
+        local sep = panel:CreateTexture(nil, "ARTWORK")
+        sep:SetTexture(0.6, 0.6, 0.6, 0.4)
+        sep:SetPoint("TOPLEFT",  panel, "TOPLEFT",  0, -22)
+        sep:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, -22)
+        sep:SetHeight(1)
+
+        local btnAllOn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        btnAllOn:SetSize(80, 22)
+        btnAllOn:SetText(L["ui_all_on"])
+        btnAllOn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 4)
+        btnAllOn:SetScript("OnClick", function()
+            for _, herbName in ipairs(AHT:GetHerbList()) do
+                AHT.herbSelected[herbName] = true
+            end
+            AHT:SaveDB()
+            AHT:RefreshHerbsTab()
+        end)
+
+        local btnAllOff = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        btnAllOff:SetSize(80, 22)
+        btnAllOff:SetText(L["ui_all_off"])
+        btnAllOff:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 84, 4)
+        btnAllOff:SetScript("OnClick", function()
+            for _, herbName in ipairs(AHT:GetHerbList()) do
+                AHT.herbSelected[herbName] = false
+            end
+            AHT:SaveDB()
+            AHT:RefreshHerbsTab()
+        end)
+
+        local btnScan = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        btnScan:SetSize(130, 22)
+        btnScan:SetText(L["herbs_btn_scan"])
+        btnScan:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+        btnScan:SetScript("OnClick", function(self)
+            if AHT:IsMatScanning() then
+                AHT:CancelMatsScan()
+                self:SetText(L["herbs_btn_scan"])
+            else
+                AHT:StartHerbScan()
+                if AHT:IsMatScanning() then self:SetText(L["herbs_cancel"]) end
+            end
+        end)
+        panel._herbScanBtn = btnScan
+        AHT.herbTabScanBtn = btnScan
+
+        local scrollUp = CreateFrame("Button", nil, panel, "UIPanelScrollUpButtonTemplate")
+        scrollUp:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, -22)
+        scrollUp:SetScript("OnClick", function()
+            if herbsTabScrollOff > 0 then
+                herbsTabScrollOff = herbsTabScrollOff - 1
+                AHT:RefreshHerbsTab()
+            end
+        end)
+        panel._herbsScrollUp = scrollUp
+
+        local scrollDown = CreateFrame("Button", nil, panel, "UIPanelScrollDownButtonTemplate")
+        scrollDown:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 28)
+        scrollDown:SetScript("OnClick", function()
+            if herbsTabScrollOff + HERBS_TAB_MAX_ROWS < #(AHT.herbDisplayResults or {}) then
+                herbsTabScrollOff = herbsTabScrollOff + 1
+                AHT:RefreshHerbsTab()
+            end
+        end)
+        panel._herbsScrollDown = scrollDown
+
+        for i = 1, HERBS_TAB_MAX_ROWS do
+            local yOff = -26 - (i - 1) * HERBS_TAB_ROW_H
+            local row  = CreateFrame("Button", nil, panel)
+            row:SetPoint("TOPLEFT",  panel, "TOPLEFT",  0, yOff)
+            row:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, yOff)
+            row:SetHeight(HERBS_TAB_ROW_H)
+            row:RegisterForClicks("RightButtonUp")
+
+            if i % 2 == 0 then
+                local bg = row:CreateTexture(nil, "BACKGROUND")
+                bg:SetTexture(1,1,1,0.04)
+                bg:SetAllPoints(row)
+            end
+
+            local c = {}
+            local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+            cb:SetSize(18, 18)
+            cb:SetPoint("LEFT", row, "LEFT", 4, 0)
+            cb._rowRef = row
+            cb:SetScript("OnClick", function(self)
+                local data = self._rowRef._data
+                if not data then return end
+                AHT.herbSelected[data.name] = self:GetChecked() and true or false
+                AHT:SaveDB()
+            end)
+            c.sel = cb
+
+            local colDefs = {
+                { id="name", x=28,  w=170, align="LEFT"  },
+                { id="cur",  x=201, w=95,  align="RIGHT" },
+                { id="avg",  x=299, w=95,  align="RIGHT" },
+                { id="dev",  x=397, w=85,  align="RIGHT" },
+                { id="list", x=485, w=60,  align="RIGHT" },
+                { id="hist", x=548, w=60,  align="RIGHT" },
+            }
+            for _, cd in ipairs(colDefs) do
+                local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                fs:SetPoint("LEFT", row, "LEFT", cd.x, 0)
+                fs:SetWidth(cd.w)
+                fs:SetJustifyH(cd.align)
+                c[cd.id] = fs
+            end
+
+            row.cells = c
+            row:EnableMouse(true)
+            row:SetScript("OnEnter", function(self)
+                local r = self._data
+                if not r then return end
+                GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+                GameTooltip:AddLine("|cffffd700" .. r.name .. "|r")
+                if r.currentPrice then
+                    GameTooltip:AddDoubleLine(L["tt_sell_price"], AHT:FormatMoney(r.currentPrice), 1,1,1, 1,1,0)
+                end
+                if r.weighted_avg then
+                    GameTooltip:AddDoubleLine(L["tt_avg_price"], AHT:FormatMoney(r.weighted_avg), 1,1,1, 0.7,0.7,0.7)
+                end
+                if r.deviation then
+                    GameTooltip:AddDoubleLine(L["herbs_col_deviation"], string.format("%+.1f%%", r.deviation), 1,1,1, 1,1,0)
+                end
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("|cff00ccff" .. L["herbs_right_click_buy"] .. "|r")
+                GameTooltip:Show()
+            end)
+            row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            row:SetScript("OnClick", function(self, btn)
+                if btn == "RightButton" and self._data then
+                    AHT:ShowMatsBuyDialog(self._data)
+                end
+            end)
+            row:Hide()
+            herbsTabRowFrames[i] = row
+        end
+
+        herbsTabCreated = true
+    end
+
+    AHT:CalculateHerbMargins()
+    local display = AHT.herbDisplayResults or {}
+    if #display == 0 then
+        display = {}
+        for _, herbName in ipairs(AHT:GetHerbList()) do
+            local hist = AHT.matsHistory[herbName] or {}
+            local historyLength = #hist
+            local weightedAvg = nil
+            if historyLength > 0 then
+                weightedAvg = hist[historyLength].weighted_avg or hist[historyLength].p
+            end
+            local currentPrice = AHT.prices[herbName]
+            local deviation = nil
+            if currentPrice and weightedAvg and weightedAvg > 0 then
+                deviation = ((currentPrice - weightedAvg) / weightedAvg) * 100
+            end
+            table.insert(display, {
+                name = herbName,
+                currentPrice = currentPrice,
+                weighted_avg = weightedAvg,
+                deviation = deviation,
+                listingCount = AHT.listingCounts[herbName] or 0,
+                historyLength = historyLength,
+            })
+        end
+    end
+    local maxOffset = math.max(0, #display - HERBS_TAB_MAX_ROWS)
+    if herbsTabScrollOff > maxOffset then
+        herbsTabScrollOff = maxOffset
+    end
+
+    for id, btn in pairs(herbsHeaderBtns) do
+        if btn and btn._fs then
+            local label = btn._label or ""
+            if AHT.herbSortMode == id then
+                local arrow = AHT.herbSortDir == "asc" and " ▲" or " ▼"
+                btn._fs:SetText("|cffffff00" .. label .. arrow .. "|r")
+            else
+                btn._fs:SetText("|cffffff00" .. label .. "|r")
+            end
+        end
+    end
+
+    for i = 1, HERBS_TAB_MAX_ROWS do
+        local idx = i + herbsTabScrollOff
+        local row = herbsTabRowFrames[i]
+        if not row then break end
+        if idx <= #display then
+            local r   = display[idx]
+            local c   = row.cells
+            row._data = r
+            c.sel:SetChecked(AHT.herbSelected[r.name] ~= false)
+            c.name:SetText(r.name)
+            c.cur:SetText(r.currentPrice and AHT:FormatMoneyPlain(r.currentPrice) or "|cff888888–|r")
+            c.avg:SetText(r.weighted_avg and AHT:FormatMoneyPlain(r.weighted_avg) or "|cff888888–|r")
+            if r.deviation then
+                local hex = r.deviation < -20 and "ff00ff00" or (r.deviation > 20 and "ffff4444" or "ffffff00")
+                c.dev:SetText(string.format("|c%s%+.1f%%|r", hex, r.deviation))
+            else
+                c.dev:SetText("|cff888888–|r")
+            end
+            c.list:SetText(tostring(r.listingCount or 0))
+            c.hist:SetText(tostring(r.historyLength or 0))
+            row:Show()
+        else
+            row._data = nil
+            row:Hide()
+        end
+    end
+
+    if panel._herbsScrollUp then
+        if herbsTabScrollOff > 0 then panel._herbsScrollUp:Enable() else panel._herbsScrollUp:Disable() end
+    end
+    if panel._herbsScrollDown then
+        if herbsTabScrollOff + HERBS_TAB_MAX_ROWS < #display then panel._herbsScrollDown:Enable() else panel._herbsScrollDown:Disable() end
     end
 end
 
@@ -1396,6 +1704,9 @@ function AHT:RefreshAllUIs()
         AHT:RefreshLeatherworkingTab()
     elseif tab == "engineering" then
         AHT:RefreshEngineeringTab()
+    elseif tab == "herbs" then
+        AHT:CalculateHerbMargins()
+        AHT:RefreshHerbsTab()
     elseif tab == "mats" then
         AHT:CalculateMatsMargins()
         AHT:RefreshMatsTab()

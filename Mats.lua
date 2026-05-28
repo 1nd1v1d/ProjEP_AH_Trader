@@ -19,6 +19,56 @@ local MATS_MAX_ROWS = 14
 
 local matsScrollOffset = 0
 
+local function BuildTrackedMarketResults(itemNames, filter)
+    local results = {}
+
+    for _, itemName in ipairs(itemNames) do
+        local currentPrice  = AHT.prices[itemName]
+        local listingCount  = AHT.listingCounts[itemName] or 0
+        local hist          = AHT.matsHistory[itemName] or {}
+        local historyLength = #hist
+
+        local weighted_avg = nil
+        if historyLength > 0 then
+            weighted_avg = hist[historyLength].weighted_avg or hist[historyLength].p
+        end
+
+        local deviation = nil
+        if currentPrice and weighted_avg and weighted_avg > 0 then
+            deviation = ((currentPrice - weighted_avg) / weighted_avg) * 100
+        end
+
+        local lastUpdate = AHT.priceUpdated[itemName]
+        if not lastUpdate and historyLength > 0 then
+            lastUpdate = hist[historyLength].t
+        end
+
+        table.insert(results, {
+            name          = itemName,
+            currentPrice  = currentPrice,
+            weighted_avg  = weighted_avg,
+            deviation     = deviation,
+            listingCount  = listingCount,
+            historyLength = historyLength,
+            lastUpdate    = lastUpdate,
+        })
+    end
+
+    table.sort(results, function(a, b)
+        return a.name < b.name
+    end)
+
+    local normalizedFilter = (filter or ""):lower()
+    local display = {}
+    for _, r in ipairs(results) do
+        if normalizedFilter == "" or r.name:lower():find(normalizedFilter, 1, true) then
+            table.insert(display, r)
+        end
+    end
+
+    return results, display
+end
+
 -- ── Gewichteter Durchschnitt ─────────────────────────────────
 -- Neuere Werte werden höher gewichtet (exponentiell)
 -- Gibt den neuen gewichteten Durchschnitt zurück
@@ -38,79 +88,73 @@ end
 
 -- ── Mats-Margen berechnen ────────────────────────────────────
 function AHT:CalculateMatsMargins()
-    local results = {}
-    local matList = AHT:GetMaterialsList()
+    local results, display = BuildTrackedMarketResults(AHT:GetMaterialsList(), AHT.matsSearchFilter)
 
-    for _, matName in ipairs(matList) do
-        local currentPrice  = AHT.prices[matName]
-        local listingCount  = AHT.listingCounts[matName] or 0
-        local hist          = AHT.matsHistory[matName] or {}
-        local historyLength = #hist
-
-        -- Gewichteten Durchschnitt aus Historie berechnen
-        local weighted_avg = nil
-        if historyLength > 0 then
-            weighted_avg = hist[historyLength].weighted_avg or hist[historyLength].p
-        end
-
-        -- Abweichung berechnen
-        local deviation = nil
-        if currentPrice and weighted_avg and weighted_avg > 0 then
-            deviation = ((currentPrice - weighted_avg) / weighted_avg) * 100
-        end
-
-        -- Letzten Scan-Zeitpunkt
-        local lastUpdate = AHT.priceUpdated[matName]
-        if not lastUpdate and historyLength > 0 then
-            lastUpdate = hist[historyLength].t
-        end
-
-        table.insert(results, {
-            name          = matName,
-            currentPrice  = currentPrice,
-            weighted_avg  = weighted_avg,
-            deviation     = deviation,
-            listingCount  = listingCount,
-            historyLength = historyLength,
-            lastUpdate    = lastUpdate,
-        })
-    end
-
-    -- Sortierung anwenden
     local mode = AHT.matsSortMode or "deviation"
     local dir  = AHT.matsSortDir  or "desc"
-
-    local sortFuncs = {
-        name = function(a, b)
-            if dir == "asc" then return a.name < b.name
-            else return a.name > b.name end
-        end,
-        current = function(a, b)
+    table.sort(results, function(a, b)
+        if mode == "name" then
+            return dir == "asc" and a.name < b.name or a.name > b.name
+        elseif mode == "current" then
             local pa = a.currentPrice or 0
             local pb = b.currentPrice or 0
             return dir == "asc" and pa < pb or pa > pb
-        end,
-        deviation = function(a, b)
+        else
             local da = a.deviation or 0
             local db = b.deviation or 0
             return dir == "asc" and da < db or da > db
-        end,
-    }
+        end
+    end)
 
-    local fn = sortFuncs[mode] or sortFuncs["deviation"]
-    table.sort(results, fn)
-
-    -- Filter anwenden
-    local filter  = AHT.matsSearchFilter or ""
-    local display = {}
+    local displaySorted = {}
+    local displayLookup = {}
+    for _, r in ipairs(display) do displayLookup[r.name] = true end
     for _, r in ipairs(results) do
-        if filter == "" or r.name:lower():find(filter:lower(), 1, true) then
-            table.insert(display, r)
+        if displayLookup[r.name] then
+            table.insert(displaySorted, r)
         end
     end
 
     AHT.matsResults        = results
-    AHT.matsDisplayResults = display
+    AHT.matsDisplayResults = displaySorted
+end
+
+function AHT:CalculateHerbMargins()
+    local results = select(1, BuildTrackedMarketResults(AHT:GetHerbList(), ""))
+
+    local mode = AHT.herbSortMode or "name"
+    local dir  = AHT.herbSortDir  or "asc"
+    table.sort(results, function(a, b)
+        if not a or not b then
+            return a ~= nil
+        end
+        if mode == "current" then
+            local pa = a.currentPrice or 0
+            local pb = b.currentPrice or 0
+            if dir == "asc" then return pa < pb else return pa > pb end
+        elseif mode == "avg" then
+            local pa = a.weighted_avg or 0
+            local pb = b.weighted_avg or 0
+            if dir == "asc" then return pa < pb else return pa > pb end
+        elseif mode == "deviation" then
+            local da = a.deviation or 0
+            local db = b.deviation or 0
+            if dir == "asc" then return da < db else return da > db end
+        elseif mode == "listings" then
+            local la = a.listingCount or 0
+            local lb = b.listingCount or 0
+            if dir == "asc" then return la < lb else return la > lb end
+        elseif mode == "history" then
+            local ha = a.historyLength or 0
+            local hb = b.historyLength or 0
+            if dir == "asc" then return ha < hb else return ha > hb end
+        else
+            if dir == "asc" then return a.name < b.name else return a.name > b.name end
+        end
+    end)
+
+    AHT.herbResults        = results
+    AHT.herbDisplayResults = results
 end
 
 -- ── Material-Analyse-Fenster ─────────────────────────────────

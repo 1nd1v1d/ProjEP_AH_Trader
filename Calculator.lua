@@ -63,12 +63,13 @@ function AHT:CalculateMargins()
         local costDetails = {}
 
         for _, reagent in ipairs(recipe.reagents) do
-            local vendorP = AHT.vendorPrices[reagent.name]
+            local vendorP = AHT:GetVendorUnitPrice(reagent.name)
             local ahP     = AHT.prices[reagent.name]
             local price   = vendorP or ahP
 
             if price then
-                local total = price * reagent.count
+                local total = vendorP and AHT:GetVendorTotalCost(reagent.name, reagent.count)
+                    or (price * reagent.count)
                 result.ingredCost = result.ingredCost + total
                 table.insert(costDetails, {
                     name     = reagent.name,
@@ -320,9 +321,10 @@ function AHT:CalcMaxIngredPpu(recipe, ingredName, targetMargin)
         if reagent.name == ingredName then
             ingredCount = reagent.count
         else
-            local vp = AHT.vendorPrices[reagent.name]
+            local vp = AHT:GetVendorUnitPrice(reagent.name)
             local ap = AHT.prices[reagent.name] or 0
-            otherCost = otherCost + (vp or ap) * reagent.count
+            otherCost = otherCost + (vp and AHT:GetVendorTotalCost(reagent.name, reagent.count)
+                or (ap * reagent.count))
         end
     end
 
