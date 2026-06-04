@@ -130,9 +130,12 @@ end
 function AHT:ApplyFilterAndSort()
     local filtered = {}
     local filter   = string.lower(AHT.searchFilter or "")
+    local showMarkedOnly = AHT.showMarkedOnly == true
 
     for _, r in ipairs(AHT.results or {}) do
-        if r and r.name and (filter == "" or string.find(string.lower(r.name), filter, 1, true)) then
+        if r and r.name
+            and (not showMarkedOnly or AHT.selected[r.name] ~= false)
+            and (filter == "" or string.find(string.lower(r.name), filter, 1, true)) then
             table.insert(filtered, r)
         end
     end

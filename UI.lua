@@ -78,6 +78,7 @@ mainFrame:SetScript("OnMouseWheel", function(self, delta)
                 AHT:RefreshHerbsTab()
             end
         else
+            display = AHT.herbVisibleResults or display
             if herbsTabScrollOff + HERBS_TAB_MAX_ROWS < #display then
                 herbsTabScrollOff = herbsTabScrollOff + 1
                 AHT:RefreshHerbsTab()
@@ -314,6 +315,7 @@ local function BuildAlchemyRows()
                         local rName = AHT.displayResults[idx].name
                         AHT.selected[rName] = self:GetChecked() and true or false
                         AHT:SaveDB()
+                        AHT:ApplyFilterAndSort()
                         AHT:RefreshUI()
                     end
                 end)
@@ -403,7 +405,13 @@ local function BuildAlchemyRows()
 end
 
 -- ── Buttons unten ────────────────────────────────────────────
-local btnAllOn, btnAllOff
+local btnAllOn, btnAllOff, btnShowMarked
+
+local function UpdateShowMarkedButton()
+    if not btnShowMarked then return end
+    local L = AHT.L
+    btnShowMarked:SetText((AHT.showMarkedOnly and L["ui_show_all"]) or L["ui_show_marked"])
+end
 
 local function BuildBottomButtons()
     local L = AHT.L
@@ -415,7 +423,7 @@ local function BuildBottomButtons()
         for _, recipe in ipairs(AHT.recipes) do
             AHT.selected[recipe.name] = true
         end
-        AHT:SaveDB(); AHT:CalculateMargins(); AHT:RefreshUI()
+        AHT:SaveDB(); AHT:CalculateMargins(); AHT:ApplyFilterAndSort(); AHT:RefreshUI()
     end)
 
     btnAllOff = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
@@ -426,13 +434,25 @@ local function BuildBottomButtons()
         for _, recipe in ipairs(AHT.recipes) do
             AHT.selected[recipe.name] = false
         end
-        AHT:SaveDB(); AHT:CalculateMargins(); AHT:RefreshUI()
+        AHT:SaveDB(); AHT:CalculateMargins(); AHT:ApplyFilterAndSort(); AHT:RefreshUI()
     end)
+
+    btnShowMarked = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
+    btnShowMarked:SetSize(90, 22)
+    btnShowMarked:SetPoint("BOTTOMLEFT", mainFrame, "BOTTOMLEFT", 182, 8)
+    btnShowMarked:SetScript("OnClick", function()
+        AHT.showMarkedOnly = not AHT.showMarkedOnly
+        scrollOffset = 0
+        UpdateShowMarkedButton()
+        AHT:ApplyFilterAndSort()
+        AHT:RefreshUI()
+    end)
+    UpdateShowMarkedButton()
 
     local btnScan = CreateFrame("Button", nil, mainFrame, "UIPanelButtonTemplate")
     btnScan:SetSize(140, 22)
     btnScan:SetText(L["ui_start_analysis"])
-    btnScan:SetPoint("BOTTOMLEFT", mainFrame, "BOTTOMLEFT", 182, 8)
+    btnScan:SetPoint("BOTTOMLEFT", mainFrame, "BOTTOMLEFT", 276, 8)
     btnScan:SetScript("OnClick", function(self)
         if AHT:IsScanning() then
             AHT:CancelScan()
@@ -460,6 +480,7 @@ local function BuildBottomButtons()
     AHT.uiScanButton = btnScan
     table.insert(alchemyElems, btnAllOn)
     table.insert(alchemyElems, btnAllOff)
+    table.insert(alchemyElems, btnShowMarked)
     table.insert(alchemyElems, btnScan)
 end
 
@@ -511,6 +532,8 @@ end
 function AHT:RefreshUI()
     if not mainFrame:IsVisible() then return end
     if AHT.activeTab ~= "alchemy" then return end
+
+    UpdateShowMarkedButton()
 
     local L       = AHT.L
     local results = AHT.displayResults or {}
@@ -612,6 +635,65 @@ AHT.sortMode     = AHT.sortMode     or "profit"
 AHT.sortDir      = AHT.sortDir      or "desc"
 AHT.searchFilter = AHT.searchFilter or ""
 
+local function GetSelectedTableByTab(tabId)
+    if tabId == "alchemy" then return AHT.selected end
+    if tabId == "blacksmithing" then return AHT.bsSelected end
+    if tabId == "tailoring" then return AHT.tailSelected end
+    if tabId == "leatherworking" then return AHT.lwSelected end
+    if tabId == "engineering" then return AHT.engSelected end
+    if tabId == "herbs" then return AHT.herbSelected end
+    if tabId == "mats" then return AHT.matsSelected end
+    return {}
+end
+
+local function GetTabShowMarkedOnly(tabId)
+    if tabId == "alchemy" then return AHT.showMarkedOnly == true end
+    if tabId == "blacksmithing" then return AHT.bsShowMarkedOnly == true end
+    if tabId == "tailoring" then return AHT.tailShowMarkedOnly == true end
+    if tabId == "leatherworking" then return AHT.lwShowMarkedOnly == true end
+    if tabId == "engineering" then return AHT.engShowMarkedOnly == true end
+    if tabId == "herbs" then return AHT.herbShowMarkedOnly == true end
+    if tabId == "mats" then return AHT.matsShowMarkedOnly == true end
+    return false
+end
+
+local function SetTabShowMarkedOnly(tabId, value)
+    if tabId == "alchemy" then AHT.showMarkedOnly = value; return end
+    if tabId == "blacksmithing" then AHT.bsShowMarkedOnly = value; return end
+    if tabId == "tailoring" then AHT.tailShowMarkedOnly = value; return end
+    if tabId == "leatherworking" then AHT.lwShowMarkedOnly = value; return end
+    if tabId == "engineering" then AHT.engShowMarkedOnly = value; return end
+    if tabId == "herbs" then AHT.herbShowMarkedOnly = value; return end
+    if tabId == "mats" then AHT.matsShowMarkedOnly = value; return end
+end
+
+local function FilterDisplayBySelection(display, selectedTable, showMarkedOnly)
+    if not showMarkedOnly then return display or {} end
+    local filtered = {}
+    for _, item in ipairs(display or {}) do
+        if item and item.name and selectedTable[item.name] ~= false then
+            table.insert(filtered, item)
+        end
+    end
+    return filtered
+end
+
+local function RefreshTabById(tabId)
+    if tabId == "alchemy" then AHT:RefreshUI(); return end
+    if tabId == "blacksmithing" then AHT:RefreshBlacksmithingTab(); return end
+    if tabId == "tailoring" then AHT:RefreshTailoringTab(); return end
+    if tabId == "leatherworking" then AHT:RefreshLeatherworkingTab(); return end
+    if tabId == "engineering" then AHT:RefreshEngineeringTab(); return end
+    if tabId == "herbs" then AHT:RefreshHerbsTab(); return end
+    if tabId == "mats" then AHT:RefreshMatsTab(); return end
+end
+
+local function UpdateTabShowMarkedButton(button, tabId)
+    if not button then return end
+    local L = AHT.L
+    button:SetText((GetTabShowMarkedOnly(tabId) and L["ui_show_all"]) or L["ui_show_marked"])
+end
+
 -- ══════════════════════════════════════════════════════════════
 -- CRAFT-TAB HELPER – Gemeinsamer Aufbau für alle 4 Handwerks-Tabs
 -- ══════════════════════════════════════════════════════════════
@@ -656,15 +738,6 @@ local function BuildCraftTab(panel, tabId)
     sep:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, -22)
     sep:SetHeight(1)
 
-    -- selectedTable für diesen Tab
-    local function getSelected()
-        if tabId == "blacksmithing"  then return AHT.bsSelected
-        elseif tabId == "tailoring"  then return AHT.tailSelected
-        elseif tabId == "leatherworking" then return AHT.lwSelected
-        elseif tabId == "engineering"    then return AHT.engSelected
-        else return {} end
-    end
-
     local rows = {}
     for i = 1, CRAFT_MAX_ROWS do
         local yOff = -26 - (i - 1) * CRAFT_ROW_H
@@ -687,9 +760,10 @@ local function BuildCraftTab(panel, tabId)
                 cb:SetScript("OnClick", function(self)
                     local d = self._rowRef._data
                     if not d then return end
-                    local sel = getSelected()
+                    local sel = GetSelectedTableByTab(tabId)
                     sel[d.name] = self:GetChecked() and true or false
                     AHT:SaveDB()
+                    RefreshTabById(tabId)
                 end)
                 c[cd.id] = cb
             else
@@ -789,6 +863,7 @@ end
 -- Fügt "Alle an", "Alle aus" und "Analyse starten" ans untere Ende des Panels
 local function AddProfessionButtons(panel, recipeTable, selectedTable, calcFn, refreshFn, scanFn, noRecKey)
     local L = AHT.L
+    local tabId = panel._tabId
 
     local btnAllOn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     btnAllOn:SetSize(80, 22)
@@ -808,10 +883,21 @@ local function AddProfessionButtons(panel, recipeTable, selectedTable, calcFn, r
         AHT:SaveDB(); calcFn(); refreshFn()
     end)
 
+    local btnShowMarked = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    btnShowMarked:SetSize(90, 22)
+    btnShowMarked:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+    btnShowMarked:SetScript("OnClick", function()
+        SetTabShowMarkedOnly(tabId, not GetTabShowMarkedOnly(tabId))
+        UpdateTabShowMarkedButton(btnShowMarked, tabId)
+        refreshFn()
+    end)
+    UpdateTabShowMarkedButton(btnShowMarked, tabId)
+    panel._showMarkedBtn = btnShowMarked
+
     local btnAnalyse = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     btnAnalyse:SetSize(140, 22)
     btnAnalyse:SetText(L["ui_start_analysis"])
-    btnAnalyse:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+    btnAnalyse:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 262, 4)
     btnAnalyse:SetScript("OnClick", function(self)
         if AHT:IsScanning() then
             AHT:CancelScan()
@@ -854,7 +940,10 @@ function AHT:RefreshBlacksmithingTab()
     if panel._noRecLbl then
         if #AHT.bsRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(bsRowFrames, AHT.bsDisplayResults or {}, AHT.bsSelected)
+    UpdateTabShowMarkedButton(panel._showMarkedBtn, "blacksmithing")
+    FillCraftRows(bsRowFrames,
+        FilterDisplayBySelection(AHT.bsDisplayResults or {}, AHT.bsSelected, GetTabShowMarkedOnly("blacksmithing")),
+        AHT.bsSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -882,7 +971,10 @@ function AHT:RefreshTailoringTab()
     if panel._noRecLbl then
         if #AHT.tailRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(tailRowFrames, AHT.tailDisplayResults or {}, AHT.tailSelected)
+    UpdateTabShowMarkedButton(panel._showMarkedBtn, "tailoring")
+    FillCraftRows(tailRowFrames,
+        FilterDisplayBySelection(AHT.tailDisplayResults or {}, AHT.tailSelected, GetTabShowMarkedOnly("tailoring")),
+        AHT.tailSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -910,7 +1002,10 @@ function AHT:RefreshLeatherworkingTab()
     if panel._noRecLbl then
         if #AHT.lwRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(lwRowFrames, AHT.lwDisplayResults or {}, AHT.lwSelected)
+    UpdateTabShowMarkedButton(panel._showMarkedBtn, "leatherworking")
+    FillCraftRows(lwRowFrames,
+        FilterDisplayBySelection(AHT.lwDisplayResults or {}, AHT.lwSelected, GetTabShowMarkedOnly("leatherworking")),
+        AHT.lwSelected)
 end
 
 -- ══════════════════════════════════════════════════════════════
@@ -938,7 +1033,10 @@ function AHT:RefreshEngineeringTab()
     if panel._noRecLbl then
         if #AHT.engRecipes == 0 then panel._noRecLbl:Show() else panel._noRecLbl:Hide() end
     end
-    FillCraftRows(engRowFrames, AHT.engDisplayResults or {}, AHT.engSelected)
+    UpdateTabShowMarkedButton(panel._showMarkedBtn, "engineering")
+    FillCraftRows(engRowFrames,
+        FilterDisplayBySelection(AHT.engDisplayResults or {}, AHT.engSelected, GetTabShowMarkedOnly("engineering")),
+        AHT.engSelected)
 end
 
 -- ── Mats-Tab ─────────────────────────────────────────────────
@@ -1011,7 +1109,7 @@ function AHT:RefreshMatsTab()
         local btnScan = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
         btnScan:SetSize(120, 22)
         btnScan:SetText(L["mats_btn_scan"])
-        btnScan:SetPoint("BOTTOMRIGHT", btnMgr, "BOTTOMLEFT", -6, 0)
+        btnScan:SetPoint("BOTTOMRIGHT", btnMgr, "BOTTOMLEFT", -100, 0)
         btnScan:SetScript("OnClick", function(self)
             if AHT:IsMatScanning() then
                 AHT:CancelMatsScan()
@@ -1038,6 +1136,18 @@ function AHT:RefreshMatsTab()
         end)
         btnScan:SetScript("OnLeave", function() GameTooltip:Hide() end)
         panel._matsScanBtn = btnScan
+
+        local btnShowMarked = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        btnShowMarked:SetSize(90, 22)
+        btnShowMarked:SetPoint("BOTTOMRIGHT", btnMgr, "BOTTOMLEFT", -6, 0)
+        btnShowMarked:SetScript("OnClick", function()
+            SetTabShowMarkedOnly("mats", not GetTabShowMarkedOnly("mats"))
+            UpdateTabShowMarkedButton(btnShowMarked, "mats")
+            matsTabScrollOff = 0
+            AHT:RefreshMatsTab()
+        end)
+        UpdateTabShowMarkedButton(btnShowMarked, "mats")
+        panel._matsShowMarkedBtn = btnShowMarked
 
         for i = 1, MATS_TAB_MAX_ROWS do
             local yOff = -26 - (i - 1) * MATS_TAB_ROW_H
@@ -1080,7 +1190,9 @@ function AHT:RefreshMatsTab()
     end
 
     AHT:CalculateMatsMargins()
-    local display = AHT.matsDisplayResults or {}
+    local display = FilterDisplayBySelection(AHT.matsDisplayResults or {}, AHT.matsSelected, GetTabShowMarkedOnly("mats"))
+    AHT.matsVisibleResults = display
+    UpdateTabShowMarkedButton(panel._matsShowMarkedBtn, "mats")
 
     for i = 1, MATS_TAB_MAX_ROWS do
         local idx = i + matsTabScrollOff
@@ -1090,7 +1202,13 @@ function AHT:RefreshMatsTab()
             local r   = display[idx]
             row._data = r
             local c   = row.cells
-            if c.name then c.name:SetText(r.name) end
+            if c.name then
+                if AHT.matsSelected[r.name] == false then
+                    c.name:SetText("|cff888888" .. r.name .. "|r")
+                else
+                    c.name:SetText(r.name)
+                end
+            end
             if c.cur  then c.cur:SetText(r.currentPrice
                 and AHT:FormatMoneyPlain(r.currentPrice) or "|cff888888–|r") end
             if c.avg  then c.avg:SetText(r.weighted_avg
@@ -1174,10 +1292,22 @@ function AHT:RefreshHerbsTab()
             AHT:RefreshHerbsTab()
         end)
 
+        local btnShowMarked = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        btnShowMarked:SetSize(90, 22)
+        btnShowMarked:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+        btnShowMarked:SetScript("OnClick", function()
+            SetTabShowMarkedOnly("herbs", not GetTabShowMarkedOnly("herbs"))
+            UpdateTabShowMarkedButton(btnShowMarked, "herbs")
+            herbsTabScrollOff = 0
+            AHT:RefreshHerbsTab()
+        end)
+        UpdateTabShowMarkedButton(btnShowMarked, "herbs")
+        panel._herbShowMarkedBtn = btnShowMarked
+
         local btnScan = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
         btnScan:SetSize(130, 22)
         btnScan:SetText(L["herbs_btn_scan"])
-        btnScan:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 168, 4)
+        btnScan:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 262, 4)
         btnScan:SetScript("OnClick", function(self)
             if AHT:IsMatScanning() then
                 AHT:CancelMatsScan()
@@ -1234,6 +1364,7 @@ function AHT:RefreshHerbsTab()
                 if not data then return end
                 AHT.herbSelected[data.name] = self:GetChecked() and true or false
                 AHT:SaveDB()
+                AHT:RefreshHerbsTab()
             end)
             c.sel = cb
 
@@ -1312,6 +1443,10 @@ function AHT:RefreshHerbsTab()
             })
         end
     end
+    display = FilterDisplayBySelection(display, AHT.herbSelected, GetTabShowMarkedOnly("herbs"))
+    AHT.herbVisibleResults = display
+    UpdateTabShowMarkedButton(panel._herbShowMarkedBtn, "herbs")
+
     local maxOffset = math.max(0, #display - HERBS_TAB_MAX_ROWS)
     if herbsTabScrollOff > maxOffset then
         herbsTabScrollOff = maxOffset
@@ -1338,7 +1473,11 @@ function AHT:RefreshHerbsTab()
             local c   = row.cells
             row._data = r
             c.sel:SetChecked(AHT.herbSelected[r.name] ~= false)
-            c.name:SetText(r.name)
+            if AHT.herbSelected[r.name] == false then
+                c.name:SetText("|cff888888" .. r.name .. "|r")
+            else
+                c.name:SetText(r.name)
+            end
             c.cur:SetText(r.currentPrice and AHT:FormatMoneyPlain(r.currentPrice) or "|cff888888–|r")
             c.avg:SetText(r.weighted_avg and AHT:FormatMoneyPlain(r.weighted_avg) or "|cff888888–|r")
             if r.deviation then

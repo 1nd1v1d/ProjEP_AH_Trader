@@ -118,42 +118,40 @@ end)
 function AHT:CalculateEngineeringMargins()
     local results = {}
     for _, recipe in ipairs(AHT.engRecipes) do
-        if AHT.engSelected[recipe.name] ~= false then
-            local ingredCost = 0
-            local allFound   = true
-            local missing    = {}
-            for _, reag in ipairs(recipe.reagents) do
-                local p = AHT:GetVendorUnitPrice(reag.name) or AHT.prices[reag.name]
-                if p then
-                    ingredCost = ingredCost + (AHT:IsVendorItem(reag.name)
-                        and AHT:GetVendorTotalCost(reag.name, reag.count)
-                        or (p * reag.count))
-                else
-                    allFound = false
-                    table.insert(missing, reag.name)
-                end
+        local ingredCost = 0
+        local allFound   = true
+        local missing    = {}
+        for _, reag in ipairs(recipe.reagents) do
+            local p = AHT:GetVendorUnitPrice(reag.name) or AHT.prices[reag.name]
+            if p then
+                ingredCost = ingredCost + (AHT:IsVendorItem(reag.name)
+                    and AHT:GetVendorTotalCost(reag.name, reag.count)
+                    or (p * reag.count))
+            else
+                allFound = false
+                table.insert(missing, reag.name)
             end
-            local sellPrice = AHT.prices[recipe.name]
-            local r = {
-                name        = recipe.name,
-                link        = recipe.link,
-                reagents    = recipe.reagents,
-                ingredCost  = ingredCost,
-                sellPrice   = sellPrice,
-                missingReag = missing,
-                allFound    = allFound,
-                volume      = AHT.listingCounts[recipe.name] or 0,
-            }
-            if allFound and sellPrice and sellPrice > 0 then
-                local provision = math.floor(sellPrice * AHT.ahCutRate)
-                local deposit   = AHT:CalcDeposit(recipe.name)
-                r.profit    = sellPrice - provision - deposit - ingredCost
-                r.margin    = ingredCost > 0 and (r.profit / ingredCost * 100) or 0
-                r.provision = provision
-                r.deposit   = deposit
-            end
-            table.insert(results, r)
         end
+        local sellPrice = AHT.prices[recipe.name]
+        local r = {
+            name        = recipe.name,
+            link        = recipe.link,
+            reagents    = recipe.reagents,
+            ingredCost  = ingredCost,
+            sellPrice   = sellPrice,
+            missingReag = missing,
+            allFound    = allFound,
+            volume      = AHT.listingCounts[recipe.name] or 0,
+        }
+        if allFound and sellPrice and sellPrice > 0 then
+            local provision = math.floor(sellPrice * AHT.ahCutRate)
+            local deposit   = AHT:CalcDeposit(recipe.name)
+            r.profit    = sellPrice - provision - deposit - ingredCost
+            r.margin    = ingredCost > 0 and (r.profit / ingredCost * 100) or 0
+            r.provision = provision
+            r.deposit   = deposit
+        end
+        table.insert(results, r)
     end
     local mode = AHT.engSortMode or "profit"
     local dir  = AHT.engSortDir  or "desc"

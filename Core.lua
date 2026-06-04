@@ -84,6 +84,7 @@ AHT.engDisplayResults = {}
 AHT.sortMode     = "profit"
 AHT.sortDir      = "desc"
 AHT.searchFilter = ""
+AHT.showMarkedOnly = false
 AHT.displayResults = {}
 
 -- ── Session-Kaufgedächtnis ────────────────────────────────────
